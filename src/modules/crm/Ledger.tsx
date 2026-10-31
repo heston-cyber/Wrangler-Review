@@ -27,13 +27,13 @@ function Diff({ v, unit, goodWhenUp = false }: { v: number; unit: "money" | "h" 
 
 function LogDialog({ l, onClose, show }: { l: L; onClose: () => void; show: (m: string) => void }) {
   const log = useMutation(api.crm.logEntry);
-  const [workId, setWorkId] = useState(l.kinds[0]?.id ?? "");
+  const [workId, setWorkId] = useState(l.logKinds[0]?.id ?? "");
   const costsFor = l.costs.filter((c) => c.kindId === workId);
   const [costId, setCostId] = useState(costsFor[0]?.id ?? "");
   const [hours, setHours] = useState(""), [cents, setCents] = useState(0), [date, setDate] = useState(todayLocal()), [note, setNote] = useState("");
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const other = costId === OTHER;
-  const unit = l.kinds.find((k) => k.id === workId)?.unit ?? "hour";
+  const unit = l.logKinds.find((k) => k.id === workId)?.unit ?? "hour";
   const pickWork = (id: string) => { setWorkId(id); setCostId(l.costs.find((c) => c.kindId === id)?.id ?? (costId === OTHER ? OTHER : "")); };
   return (
     <Modal onClose={onClose} label="Log hours or a cost" width={560}>
@@ -48,7 +48,7 @@ function LogDialog({ l, onClose, show }: { l: L; onClose: () => void; show: (m: 
         <DialogHeader eyebrow={l.project.label} title="Log hours or a cost" body="Goes into the ledger's actuals." onClose={onClose} />
         <div className="crm-grid2">
           <label className="wp-field"><span className="wp-field-label">Kind of work</span>
-            <select className="input" value={workId} onChange={(e) => pickWork(e.target.value)}>{l.kinds.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}</select></label>
+            <select className="input" value={workId} onChange={(e) => pickWork(e.target.value)}>{l.logKinds.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}</select></label>
           {other ? <div className="wp-field"><span className="wp-field-label">Amount</span><MoneyInput label="Amount" value={cents} onChange={setCents} /></div>
             : <TextField label={unit === "day" ? "Days" : "Hours"} inputMode="decimal" value={hours} onChange={(e) => setHours(e.target.value)} placeholder="0" autoFocus />}
           <label className="wp-field"><span className="wp-field-label">Cost</span>
@@ -107,12 +107,12 @@ function ExportDialog({ l, onClose, show }: { l: L; onClose: () => void; show: (
 function EntryRow({ e, show }: { e: L["entries"][number]; show: (m: string) => void }) {
   const act = useMutation(api.crm.entryAction);
   const [busy, setBusy] = useState(false);
-  const go = async (action: "confirm" | "remove") => { setBusy(true); try { await act({ entryId: e._id as Id<"ledgerEntries">, action }); show(action === "confirm" ? "Confirmed." : "Removed."); } catch (er) { show(errText(er)); setBusy(false); } };
+  const go = async (action: "confirm" | "remove") => { setBusy(true); try { await act({ entryId: e._id as Id<"ledgerEntries">, action }); show(action === "confirm" ? "Confirmed." : "Removed."); } catch (er) { show(errText(er)); } finally { setBusy(false); } };
   const title = e.kind === "cost" ? `${e.note || "Cost"} · ${money(e.cents)}` : `${e.work ?? "Hours"} · ${q(e.hours ?? 0)}${e.unit === "day" ? (e.hours === 1 ? " day" : " days") : " h"}`;
-  const meta = e.draft ? `Drafted by Claude${e.note ? ` · ${e.note}` : ""}` : [e.kind === "hours" ? e.cost ?? e.who : e.work, dateShort(e.date), e.kind === "hours" ? money(e.cents) : null, e.kind === "hours" ? e.note : null].filter(Boolean).join(" · ");
+  const meta = e.draft ? `Drafted by Claude${e.note ? ` · ${e.note}` : ""}` : [e.kind === "hours" ? e.cost ?? e.who : e.work, dateShort(e.date), e.kind === "hours" ? (e.unpriced ? "no cost set" : money(e.cents)) : null, e.kind === "hours" ? e.note : null].filter(Boolean).join(" · ");
   return (
     <ListRow className="ilead" lead={{ icon: e.draft ? "note" : e.kind === "cost" ? "invoice" : "clock" }} title={title} meta={meta}
-      chip={e.draft ? <StatusChip tone="neutral">Draft</StatusChip> : undefined}
+      chip={e.draft ? <StatusChip tone="neutral">Draft</StatusChip> : e.unpriced ? <StatusChip tone="warning">No cost</StatusChip> : undefined}
       action={e.draft ? <span className="crm-acts"><Button size="sm" variant="ghost" disabled={busy} onClick={() => void go("remove")}>Remove</Button><Button size="sm" loading={busy} onClick={() => void go("confirm")}>Confirm</Button></span>
         : <button type="button" className="linkbtn crm-rm" disabled={busy} onClick={() => void go("remove")} aria-label="Remove entry"><Icon name="close" size={14} /></button>} />
   );
@@ -130,7 +130,7 @@ export function LedgerTab({ projectId, show }: { projectId: Id<"projects">; show
       <p className="wp-body">Estimate vs actual for {l.project.label}. Only you see this.</p>
       <span className="sp" />
       <Button onClick={() => setDialog("export")}>Export to Google Sheet</Button>
-      <Button variant="primary" onClick={() => setDialog("log")} disabled={!l.kinds.length}>Log hours or a cost</Button>
+      <Button variant="primary" onClick={() => setDialog("log")} disabled={!l.logKinds.length}>Log hours or a cost</Button>
     </div>
   );
   const shown = all ? l.entries : l.entries.slice(0, 4);
@@ -160,7 +160,7 @@ export function LedgerTab({ projectId, show }: { projectId: Id<"projects">; show
               <tr><td>Owner income {q(100 - l.reservePct)}%</td><td>{e ? money(e.ownerCents) : "—"}</td><td>{money(a.ownerCents)}</td><td>{e ? <Diff v={a.ownerCents - e.ownerCents} unit="money" goodWhenUp /> : <span className="dim">—</span>}</td></tr>
             </tbody>
           </table>
-          <p className="crm-note">{a.billed ? `Actual price is what was billed. Paid so far: ${money(l.paidCents)} (from Stripe).` : "Nothing billed yet, so the actual price is the estimate's. Once you send invoices, it's what was billed."}{l.exportedAt ? ` In the Sheet's Job ledger tab since ${dateLong(new Date(l.exportedAt).toISOString().slice(0, 10))}.` : ""}</p>
+          <p className="crm-note">{a.billed ? `Actual price is what was billed, less refunds. Paid so far: ${money(l.paidCents)} (from Stripe).` : `Until the final invoice goes out, the actual price is the estimate's. Billed so far: ${money(l.billedCents)} · paid ${money(l.paidCents)} (from Stripe).`}{l.entries.some((x) => x.unpriced && !x.draft) ? " Hours marked No cost have no subcontractor cost in your rates (Settings › Estimate rates), so they count as $0." : ""}{l.exportedAt ? ` In the Sheet's Job ledger tab since ${dateLong(new Date(l.exportedAt).toISOString().slice(0, 10))}.` : ""}</p>
         </Card>
         <Card label="Logged" head={<SectionHead label="Logged" count={l.entries.length} />}>
           {l.entries.length === 0 ? <ListRow className="ilead quiet" lead={{ icon: "clock" }} title="Nothing logged yet." meta="Log hours and costs as the job goes, or ask Claude to draft them from your notes." />

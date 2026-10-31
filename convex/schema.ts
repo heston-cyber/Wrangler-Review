@@ -759,6 +759,8 @@ export default defineSchema({
     result: v.any(),                             // Estimate (lib/estimate.ts)
     documentId: v.optional(v.id("wsDocuments")),
     buildId: v.optional(v.id("wsBuilds")),
+    contractAt: v.optional(v.number()),         // when Make contract draft last wrote the draft (its numbers are from this save)
+    contractClaimAt: v.optional(v.number()),    // a Make contract draft in progress (one at a time)
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_deal", ["dealId"]).index("by_project", ["projectId"]),

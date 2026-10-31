@@ -29,11 +29,13 @@ const pick = (data: Record<string, unknown>, ...names: string[]) => {
   return "";
 };
 
-/** Spam is dropped before a card is made: a filled honeypot, no real email, link-stuffed text, or a repeat. */
+/** Spam is dropped before a card is made: a filled honeypot, no real email, link-stuffed text, or a repeat.
+ *  The honeypot is a hidden field named "hp" (or honeypot, _gotcha, bot-field) on the new site's form (D29); a
+ *  real "Website" field is kept as a lead detail (review, Oct 31). */
 export function looksLikeSpam(data: Record<string, unknown>) {
-  if (pick(data, "website", "url", "honeypot", "hp")) return "honeypot";
+  if (pick(data, "hp", "honeypot", "gotcha", "botfield")) return "honeypot";
   const email = pick(data, "email", "emailaddress");
-  if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) return "no email";
+  if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) return "no email";
   const text = Object.values(data).map((x) => String(x ?? "")).join(" ");
   if ((text.match(/https?:\/\//gi) ?? []).length > 2) return "links";
   if (/\b(viagra|casino|crypto ?invest|seo services|backlinks)\b/i.test(text)) return "words";
@@ -49,10 +51,13 @@ export const fromWebsite = internalMutation({
     const name = pick(d, "name", "fullname", "yourname") || email;
     const company = pick(d, "company", "business", "companyname", "organization");
     const now = Date.now();
-    // The same person within 10 minutes (a double submit) is one lead.
-    const recent = (await ctx.db.query("deals").collect()).find((x) => x.lead?.email === email && now - x.createdAt < 10 * 60_000);
+    // A double submit (the same submission, or the same person sending the same message within 10 minutes) is one
+    // lead; a different message from the same person is a new one.
+    const message = pick(d, "message", "details", "project").slice(0, 3000);
+    const all = await ctx.db.query("deals").collect();
+    if (submissionId && all.some((x) => x.history.some((h) => h.kind === "website" && h.detail === submissionId))) return null;
+    const recent = all.find((x) => x.lead?.email === email && (x.lead?.message ?? "") === message && now - x.createdAt < 10 * 60_000);
     if (recent) return recent._id;
-    if (submissionId && (await ctx.db.query("deals").collect()).some((x) => x.history.some((h) => h.kind === "website" && h.detail === submissionId))) return null;
     const biz = await defaultBusiness(ctx);
     const known = new Set(["name", "fullname", "yourname", "email", "emailaddress", "company", "business", "companyname", "organization", "phone", "phonenumber", "message", "details", "project"]);
     return await ctx.db.insert("deals", {
@@ -75,7 +80,7 @@ export const webflow = httpAction(async (ctx, req) => {
   try { j = JSON.parse(body); } catch { return new Response("bad body", { status: 400 }); }
   if (j.triggerType && j.triggerType !== "form_submission") return new Response("ignored", { status: 200 });
   const only = process.env.WEBFLOW_FORM_NAME; // when set, other forms on the site are ignored
-  if (only && j.payload?.name && j.payload.name !== only) return new Response("ignored", { status: 200 });
+  if (only && j.payload?.name !== only) return new Response("ignored", { status: 200 });
   await ctx.runMutation(internal.leads.fromWebsite, { data: j.payload?.data ?? {}, submissionId: j.payload?.id });
   return new Response("ok", { status: 200 });
 });

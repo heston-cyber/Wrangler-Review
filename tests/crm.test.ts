@@ -29,7 +29,7 @@ describe("T3.1 leads from the website", () => {
     expect((await w.t.fetch("/leads/webflow", { method: "POST", body, headers: await sign(body, Date.now() - 10 * 60_000) })).status).toBe(400);
     expect((await w.t.fetch("/leads/webflow", { method: "POST", body, headers: await sign(body) })).status).toBe(200);
     expect((await w.t.fetch("/leads/webflow", { method: "POST", body, headers: await sign(body) })).status).toBe(200);
-    const spam = JSON.stringify({ triggerType: "form_submission", payload: { data: { Name: "x", Email: "x@y.example", Website: "http://spam.example" } } });
+    const spam = JSON.stringify({ triggerType: "form_submission", payload: { data: { Name: "x", Email: "x@y.example", hp: "http://spam.example" } } });
     await w.t.fetch("/leads/webflow", { method: "POST", body: spam, headers: await sign(spam) });
     const b = await w.heston.query(api.crm.board, {});
     expect(b.deals).toEqual([expect.objectContaining({ title: "Okie Roasters", stage: "lead", website: true, company: "Okie Roasters" })]);
@@ -123,7 +123,7 @@ describe("Phase 3 screens' extras (Oct 31)", () => {
     await w.heston.mutation(api.projects.setStage, { projectId: w.p, stage: "production", post: false });
     expect((await w.heston.query(api.crm.deal, { dealId })).stage).toBe("in_production");
     // The estimate now belongs to the project, so the ledger compares against it.
-    const tomorrow = new Date(Date.now() - 6 * 3600_000 + 86_400_000).toISOString().slice(0, 10);
+    const tomorrow = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + 86_400_000));
     await w.heston.mutation(api.crm.addFollowUp, { who: "Maya", about: "", due: tomorrow, remind: "day_before" });
     await w.heston.mutation(api.crm.addFollowUp, { who: "Jordan", about: "", due: tomorrow });
     expect((await w.heston.query(api.crm.due, {})).map((f: { who: string }) => f.who)).toEqual(["Maya"]);
@@ -138,8 +138,64 @@ describe("Phase 3 screens' extras (Oct 31)", () => {
         status: "paid", totalCents: 480_000, amountPaidCents: 480_000, amountRemainingCents: 0 });
     });
     l = await w.heston.query(api.crm.ledger, { projectId: w.p });
-    expect(l).toMatchObject({ billedCents: 480_000, paidCents: 480_000, actual: { priceCents: 480_000, billed: true } });
+    expect(l).toMatchObject({ billedCents: 480_000, paidCents: 480_000, actual: { priceCents: 1_920_000, billed: false } });
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("invoices", { businessId: w.A, clientId: w.harbor, projectId: w.p, kind: "final", title: "Final", billTo: { name: "M", email: "maya@harbor.example" }, lines: [], dueDate: "2030-01-01", history: [], createdAt: 0, updatedAt: 0,
+        status: "open", totalCents: 1_440_000, amountPaidCents: 0, amountRemainingCents: 1_440_000, refundedCents: 0 });
+    });
+    l = await w.heston.query(api.crm.ledger, { projectId: w.p });
+    expect(l.actual).toMatchObject({ priceCents: 1_920_000, billed: true });
     expect(await w.heston.mutation(api.crm.setLedgerExportAll, {})).toBe(1);
     expect((await w.heston.query(api.crm.ledger, { projectId: w.p })).exportedAt).toBeTruthy();
+  });
+});
+
+describe("review fixes (Oct 31)", () => {
+  test("another business can't hang a card on this business's project, company or card", async () => {
+    const w = await world();
+    await expect(w.boss.mutation(api.crm.saveEstimate, { projectId: w.p, title: "x", scope: "", input: { unit: "days", amount: 1 } })).rejects.toThrow();
+    await expect(w.boss.mutation(api.crm.saveEstimate, { clientId: w.harbor, title: "x", scope: "", input: { unit: "days", amount: 1 } })).rejects.toThrow();
+    await expect(w.boss.mutation(api.crm.addFollowUp, { who: "x", about: "", due: "2030-01-01", clientId: w.harbor })).rejects.toThrow();
+    // Even a card stored with this project's id (written straight to the table) isn't moved by its events.
+    const other = await w.t.run(async (ctx) => {
+      const B = (await ctx.db.query("businesses").collect()).find((b) => b._id !== w.A)!._id;
+      return ctx.db.insert("deals", { businessId: B, title: "theirs", projectId: w.p, stage: "lead", source: "hand", history: [], createdAt: 0, updatedAt: 0 });
+    });
+    const { crmProject } = await import("../convex/crm");
+    await w.t.run(async (ctx) => { await crmProject(ctx as never, w.p, "paid", "final paid"); });
+    expect(await w.t.run((ctx) => ctx.db.get(other))).toMatchObject({ stage: "lead" });
+  });
+
+  test("a lead from an existing client's person reuses the company and contact; one card per project", async () => {
+    const w = await world();
+    const dealId = await w.t.run((ctx) => ctx.db.insert("deals", { businessId: w.A, title: "Harbor", stage: "lead", source: "website", contactEmail: "maya@harbor.example",
+      lead: { name: "Maya Brooks", email: "maya@harbor.example", company: "Harbor Coffee", fields: [], at: 0 }, history: [], createdAt: 0, updatedAt: 0 }));
+    await w.heston.mutation(api.crm.saveEstimate, { dealId, title: "Spring", scope: "", input: { unit: "days", amount: 1 } });
+    const counts = await w.t.run(async (ctx) => ({ clients: (await ctx.db.query("clients").collect()).filter((c) => c.businessId === w.A).length, maya: (await ctx.db.query("clientPeople").collect()).filter((p) => p.email === "maya@harbor.example").length }));
+    expect(counts).toEqual({ clients: 1, maya: 1 });
+    expect((await w.heston.query(api.crm.deal, { dealId })).clientId).toBe(w.harbor);
+    await w.heston.mutation(api.crm.linkProject, { dealId, projectId: w.p });
+    await w.heston.mutation(api.crm.saveEstimate, { projectId: w.p, clientId: w.harbor, title: "From the ledger", scope: "", input: { unit: "days", amount: 2 } });
+    expect((await w.heston.query(api.crm.board, {})).deals.length).toBe(1);
+  });
+
+  test("logged work is priced at the current rates; hours need a kind; unpriced hours are shown; a deposit isn't a loss", async () => {
+    const w = await world();
+    await w.heston.mutation(api.crm.saveEstimate, { projectId: w.p, clientId: w.harbor, title: "Job", scope: "", input: { unit: "days", amount: 4 } });
+    const r = (await w.heston.query(api.crm.rates, {})).rates;
+    await w.heston.mutation(api.crm.saveRates, { rates: { ...r, kinds: [...r.kinds, { id: "color", name: "Color", unit: "hour", clientCents: 15000 }, { id: "admin", name: "Admin", unit: "hour", clientCents: 0 }], costs: [...r.costs, { id: "colorist", name: "Colorist", kindId: "color", cents: 10000 }] } });
+    await w.heston.mutation(api.crm.logEntry, { projectId: w.p, kind: "hours", workId: "color", hours: 10, date: "2026-10-31" });
+    await w.heston.mutation(api.crm.logEntry, { projectId: w.p, kind: "hours", workId: "admin", hours: 2, date: "2026-10-31" });
+    await expect(w.heston.mutation(api.crm.logEntry, { projectId: w.p, kind: "hours", hours: 3, date: "2026-10-31" })).rejects.toThrow(/kind of work/);
+    const l = await w.heston.query(api.crm.ledger, { projectId: w.p });
+    expect(l.kinds.find((k: { id: string }) => k.id === "color")).toMatchObject({ actQty: 10, actCents: 100_000 });
+    expect(l.entries.find((e: { workId: string }) => e.workId === "admin")).toMatchObject({ unpriced: true, cents: 0 });
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("invoices", { businessId: w.A, clientId: w.harbor, projectId: w.p, kind: "deposit", title: "Deposit", billTo: { name: "M", email: "maya@harbor.example" }, lines: [], dueDate: "2030-01-01", history: [], createdAt: 0, updatedAt: 0,
+        status: "paid", totalCents: 480_000, amountPaidCents: 480_000, amountRemainingCents: 0 });
+    });
+    const after = await w.heston.query(api.crm.ledger, { projectId: w.p });
+    expect(after.actual).toMatchObject({ priceCents: 1_920_000, billed: false });
+    expect(after).toMatchObject({ billedCents: 480_000, paidCents: 480_000 });
   });
 });

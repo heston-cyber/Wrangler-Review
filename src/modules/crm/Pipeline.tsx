@@ -98,9 +98,9 @@ export default function Pipeline() {
               actions={<Button variant="primary" onClick={() => setAdding(true)}>Add lead</Button>} />
           ) : (
             <>
-              <div className="crm-sums" role="list">
+              <div className="crm-sums">
                 {board.stages.map((s) => (
-                  <button type="button" role="listitem" key={s.key} className={`crm-sum${phoneStage === s.key ? " on" : ""}`} onClick={() => setPhoneStage(s.key as Stage)}>
+                  <button type="button" key={s.key} aria-pressed={phoneStage === s.key} className={`crm-sum${phoneStage === s.key ? " on" : ""}`} onClick={() => setPhoneStage(s.key as Stage)}>
                     <span className="lbl">{s.name}</span><span className="n">{s.n} · {money(s.cents).replace(/\.00$/, "")}</span>
                   </button>
                 ))}

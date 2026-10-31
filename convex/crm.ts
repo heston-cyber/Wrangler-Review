@@ -8,7 +8,7 @@ import { internalMutation, internalQuery, mutation, query } from "./lib/function
 import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
 import { requireMe } from "./lib/access";
 import { businessInScope, defaultBusiness } from "./lib/business";
 import { EMPTY_RATES, WRANGLER_RATES, estimate, primaryKind, ratesProblems, type EstimateInput, type Rates } from "./lib/estimate";
@@ -21,7 +21,12 @@ export type Stage = (typeof STAGES)[number];
 const stageV = v.union(v.literal("lead"), v.literal("quoted"), v.literal("contract_sent"), v.literal("signed"), v.literal("in_production"), v.literal("delivered"), v.literal("paid"));
 export const STAGE_NAME: Record<Stage, string> = { lead: "Lead", quoted: "Quoted", contract_sent: "Contract sent", signed: "Signed", in_production: "In production", delivered: "Delivered", paid: "Paid" };
 const label = (p: { name: string; jobNumber?: string }) => (p.jobNumber ? `${p.jobNumber} ${p.name}` : p.name);
-const todayIso = () => new Date(Date.now() - 6 * 3600_000).toISOString().slice(0, 10);
+// "Today" in Central time (Wrangler's), through daylight saving (review, Oct 31). A per-business time zone comes
+// with Phase P.
+const todayIso = () => {
+  try { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
+  catch { return new Date(Date.now() - 6 * 3600_000).toISOString().slice(0, 10); }
+};
 
 async function ownerBiz(ctx: QueryCtx | MutationCtx) {
   const me = await requireMe(ctx);
@@ -74,20 +79,27 @@ async function advanceDeal(ctx: MutationCtx, d: Doc<"deals">, stage: Stage, deta
 
 /** Called from Sign (sent, signed): the deal whose estimate made this contract. */
 export async function crmDocument(ctx: MutationCtx, documentId: Id<"wsDocuments">, stage: Stage, detail: string) {
-  let deals = await ctx.db.query("deals").withIndex("by_document", (q) => q.eq("documentId", documentId)).collect();
+  // Review (Oct 31): hooks can run without a business in scope (Stripe's webhook, a signer), so only this
+  // document's own business's cards move; another business can't hang a card on it.
+  const doc = await ctx.db.get(documentId);
+  if (!doc) return;
+  const mine = <T extends { businessId?: Id<"businesses"> }>(x: T) => x.businessId === doc.businessId;
+  let deals = (await ctx.db.query("deals").withIndex("by_document", (q) => q.eq("documentId", documentId)).collect()).filter(mine);
   if (!deals.length) {
     // A contract drafted from an estimate: its build becomes this document when it goes to signing.
-    const build = await ctx.db.query("wsBuilds").withIndex("by_document", (q) => q.eq("documentId", documentId)).first();
-    const est = build ? (await ctx.db.query("estimates").collect()).find((e) => e.buildId === build._id) : null;
+    const build = (await ctx.db.query("wsBuilds").withIndex("by_document", (q) => q.eq("documentId", documentId)).collect()).find(mine);
+    const est = build ? (await ctx.db.query("estimates").collect()).find((e) => e.buildId === build._id && mine(e)) : null;
     const d = est?.dealId ? await ctx.db.get(est.dealId) : null;
-    if (d) { await ctx.db.patch(d._id, { documentId }); if (est) await ctx.db.patch(est._id, { documentId }); deals = [{ ...d, documentId }]; }
+    if (d && mine(d)) { await ctx.db.patch(d._id, { documentId }); if (est) await ctx.db.patch(est._id, { documentId }); deals = [{ ...d, documentId }]; }
   }
   for (const d of deals) await advanceDeal(ctx, d, stage, detail);
 }
 
 /** Called from projects (stage, final files) and invoices (the final invoice paid). */
 export async function crmProject(ctx: MutationCtx, projectId: Id<"projects">, stage: Stage, detail: string) {
-  for (const d of await ctx.db.query("deals").withIndex("by_project", (q) => q.eq("projectId", projectId)).collect()) await advanceDeal(ctx, d, stage, detail);
+  const p = await ctx.db.get(projectId);
+  if (!p) return;
+  for (const d of await ctx.db.query("deals").withIndex("by_project", (q) => q.eq("projectId", projectId)).collect()) if (d.businessId === p.businessId) await advanceDeal(ctx, d, stage, detail);
 }
 
 export const board = query({
@@ -256,7 +268,9 @@ export const addFollowUp = mutation({
     const { me } = await ownerBiz(ctx);
     if (!a.who.trim()) throw new ConvexError("Who to follow up with, please.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(a.due)) throw new ConvexError("Pick a due date.");
+    if (a.clientId && !(await ctx.db.get(a.clientId))) throw new ConvexError("That company isn't here.");
     const d = a.dealId ? await ctx.db.get(a.dealId) : null;
+    if (a.dealId && !d) throw new ConvexError("That card isn't here.");
     return await ctx.db.insert("followUps", { who: a.who.trim().slice(0, 120), about: a.about.trim().slice(0, 300), due: a.due, ...(a.note?.trim() ? { note: a.note.trim().slice(0, 1000) } : {}), ...(a.remind ? { remind: a.remind } : {}),
       ...((a.clientId ?? d?.clientId) ? { clientId: a.clientId ?? d!.clientId } : {}), ...(a.dealId ? { dealId: a.dealId } : {}), ...(a.email ? { email: a.email.trim().toLowerCase() } : {}),
       createdBy: me.name ?? me.email, createdAt: Date.now() });
@@ -314,27 +328,42 @@ export const saveEstimate = mutation({
     const result = estimate(r, toInput(r, a.input as never));
     const now = Date.now();
     const by = me.name ?? me.email;
-    let dealId = a.dealId ?? null;
-    let clientId = a.clientId ?? null;
+    // Review (Oct 31): every id from the call is read through the guard first, so another business's company,
+    // project or estimate is refused rather than stored.
+    if (a.clientId && !(await ctx.db.get(a.clientId))) throw new ConvexError("That company isn't here.");
+    if (a.projectId && !(await ctx.db.get(a.projectId))) throw new ConvexError("That project isn't here.");
+    const old = a.estimateId ? await ctx.db.get(a.estimateId) : null;
+    if (a.estimateId && !old) throw new ConvexError("That estimate isn't here.");
+    let dealId = a.dealId ?? old?.dealId ?? null;
+    let clientId = a.clientId ?? old?.clientId ?? null;
+    const projectId = a.projectId ?? old?.projectId ?? null;
+    // One card per job: an estimate for a project that already has a card goes on that card.
+    if (!dealId && projectId) dealId = (await ctx.db.query("deals").withIndex("by_project", (q) => q.eq("projectId", projectId)).collect()).find((x) => !x.closedAt)?._id ?? null;
     if (dealId) {
       const d = await ctx.db.get(dealId);
       if (!d) throw new ConvexError("That card isn't here.");
       clientId = clientId ?? d.clientId ?? null;
       if (!clientId && d.lead) {
-        // D56: the website lead's company and contact, made at the first estimate.
-        clientId = await ctx.db.insert("clients", { name: (d.lead.company || d.lead.name).slice(0, 120), createdAt: now });
-        await ctx.db.insert("clientPeople", { clientId, email: d.lead.email, name: d.lead.name, role: "signer", createdAt: now });
-        await ctx.db.patch(dealId, { clientId, contactEmail: d.lead.email });
+        // D56: the website lead's company and contact, made at the first estimate. Review (Oct 31): an existing
+        // client is reused (the person's email, then the company's name), so nothing is doubled.
+        const email = d.lead.email.toLowerCase();
+        const byEmail = (await ctx.db.query("clientPeople").collect()).find((x) => !x.removedAt && x.email.toLowerCase() === email);
+        const wanted = (d.lead.company || d.lead.name).trim().toLowerCase();
+        const byName = (await ctx.db.query("clients").collect()).find((x) => x.name.trim().toLowerCase() === wanted);
+        clientId = byEmail?.clientId ?? byName?._id ?? await ctx.db.insert("clients", { name: (d.lead.company || d.lead.name).slice(0, 120), createdAt: now });
+        const there = (await ctx.db.query("clientPeople").withIndex("by_client", (q) => q.eq("clientId", clientId!)).collect()).some((x) => !x.removedAt && x.email.toLowerCase() === email);
+        if (!there) await ctx.db.insert("clientPeople", { clientId, email, name: d.lead.name, role: "signer", createdAt: now });
+        await ctx.db.patch(dealId, { clientId, contactEmail: email });
       }
     } else {
-      dealId = await ctx.db.insert("deals", { title, ...(clientId ? { clientId } : {}), ...(a.projectId ? { projectId: a.projectId } : {}), stage: "quoted", source: "estimate", history: [{ kind: "created", at: now, by, detail: "from an estimate" }], createdAt: now, updatedAt: now });
+      dealId = await ctx.db.insert("deals", { title, ...(clientId ? { clientId } : {}), ...(projectId ? { projectId } : {}), stage: "quoted", source: "estimate", history: [{ kind: "created", at: now, by, detail: "from an estimate" }], createdAt: now, updatedAt: now });
     }
-    const fields = { title, scope: a.scope.trim().slice(0, 2000), input: a.input, rates: r, result, ...(clientId ? { clientId } : {}), ...(a.projectId ? { projectId: a.projectId } : {}), dealId, updatedAt: now };
+    const fields = { title, scope: a.scope.trim().slice(0, 2000), input: a.input, rates: r, result, ...(clientId ? { clientId } : {}), ...(projectId ? { projectId } : {}), dealId, updatedAt: now };
     let estimateId = a.estimateId ?? null;
-    if (estimateId) { if (!(await ctx.db.get(estimateId))) throw new ConvexError("That estimate isn't here."); await ctx.db.patch(estimateId, fields); }
+    if (estimateId) await ctx.db.patch(estimateId, fields);
     else estimateId = await ctx.db.insert("estimates", { ...fields, createdAt: now });
     const d = (await ctx.db.get(dealId))!;
-    await ctx.db.patch(dealId, { estimateId, valueCents: result.priceCents, ...(a.projectId && !d.projectId ? { projectId: a.projectId } : {}), updatedAt: now });
+    await ctx.db.patch(dealId, { estimateId, valueCents: result.priceCents, ...(projectId && !d.projectId ? { projectId } : {}), updatedAt: now });
     await advanceDeal(ctx, (await ctx.db.get(dealId))!, "quoted", "estimate saved");
     return estimateId;
   },
@@ -357,55 +386,100 @@ export const contractTarget = internalQuery({
 
 export const linkBuild = internalMutation({
   args: { estimateId: v.id("estimates"), buildId: v.id("wsBuilds") },
-  handler: async (ctx, { estimateId, buildId }) => { await ctx.db.patch(estimateId, { buildId, updatedAt: Date.now() }); },
+  handler: async (ctx, { estimateId, buildId }) => { await ctx.db.patch(estimateId, { buildId, contractAt: Date.now(), contractClaimAt: undefined }); },
+});
+
+/** One Make contract draft at a time per estimate (a double click makes one draft). */
+export const claimContract = internalMutation({
+  args: { estimateId: v.id("estimates"), release: v.optional(v.boolean()) },
+  handler: async (ctx, { estimateId, release }) => {
+    await ownerBiz(ctx);
+    const e = await ctx.db.get(estimateId);
+    if (!e) throw new ConvexError("That estimate isn't here.");
+    if (release) { await ctx.db.patch(estimateId, { contractClaimAt: undefined }); return null; }
+    if (e.contractClaimAt && Date.now() - e.contractClaimAt < 60_000) throw new ConvexError("The contract draft is already being made. Give it a moment.");
+    await ctx.db.patch(estimateId, { contractClaimAt: Date.now() });
+    return null;
+  },
 });
 
 /** Make contract draft in Sign: a builder draft from the Service Agreement template with the estimate's client-facing
  *  lines and the deposit. Nothing is sent; it goes to signing and out as every contract does (approve, then send). */
 export const makeContract = action({
   args: { estimateId: v.id("estimates"), depositPercent: v.optional(v.number()) },
-  handler: async (ctx, { estimateId, depositPercent = 25 }): Promise<{ buildId: Id<"wsBuilds"> }> => {
+  handler: async (ctx, { estimateId, depositPercent = 25 }): Promise<{ buildId: Id<"wsBuilds">; kept?: "signing" }> => {
     const t = await ctx.runQuery(internal.crm.contractTarget, { estimateId });
-    if (t.e.buildId) return { buildId: t.e.buildId };
-    const templates = await ctx.runQuery(internal.builder.templatesInternal, {});
-    const tpl = templates.find((x) => /service agreement/i.test(x.name)) ?? null;
-    if (!tpl) throw new ConvexError("There's no template named \"Service Agreement\" yet (Docs › Templates).");
-    const result = t.e.result as { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }> };
-    const buildId = await ctx.runMutation(internal.builder.createBuildFor, { title: `${tpl.name} · ${t.company || t.e.title}`.slice(0, 120), page: tpl.page, templateId: tpl._id as Id<"wsTemplates"> });
+    // Review (Oct 31): the draft carries the estimate's latest numbers. A draft that has already gone to signing is
+    // never changed (it opens as it is); a draft still being edited gets the new lines and deposit; a deleted one is
+    // made again.
+    const existing = t.e.buildId ? await ctx.runQuery(internal.builder.buildInternal, { buildId: t.e.buildId }) : null;
+    if (existing?.documentId) return { buildId: existing._id, kept: "signing" };
+    if (existing && t.e.contractAt && t.e.contractAt >= t.e.updatedAt) return { buildId: existing._id };
+    await ctx.runMutation(internal.crm.claimContract, { estimateId });
+    try {
+      const result = t.e.result as { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }> };
+      let buildId: Id<"wsBuilds">;
+      if (existing) buildId = existing._id;
+      else {
+        const templates = await ctx.runQuery(internal.builder.templatesInternal, {});
+        const tpl = templates.find((x) => /service agreement/i.test(x.name)) ?? null;
+        if (!tpl) throw new ConvexError("There's no template named \"Service Agreement\" yet (Docs › Templates).");
+        buildId = await ctx.runMutation(internal.builder.createBuildFor, { title: `${tpl.name} · ${t.company || t.e.title}`.slice(0, 120), page: tpl.page, templateId: tpl._id as Id<"wsTemplates"> });
+      }
+      await fillContract(ctx, buildId, t, result, depositPercent);
+      await ctx.runMutation(internal.crm.linkBuild, { estimateId, buildId });
+      return { buildId };
+    } catch (err) {
+      await ctx.runMutation(internal.crm.claimContract, { estimateId, release: true }).catch(() => null);
+      throw err;
+    }
+  },
+});
+
+type Target = { e: Doc<"estimates">; company: string; signer: { name: string; email: string } | null; project: string };
+async function fillContract(ctx: ActionCtx, buildId: Id<"wsBuilds">, t: Target, result: { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }> }, depositPercent: number) {
     const b = (await ctx.runQuery(internal.builder.buildInternal, { buildId }))!;
     const r = applyArgs(b.fields as Fields, (b.signers as never) ?? [], b.page, {
       client: { name: t.signer?.name ?? "", email: t.signer?.email ?? "", company: t.company },
-      project: t.project, date: new Date(Date.now() - 6 * 3600_000).toISOString().slice(0, 10),
+      project: t.project, date: todayIso(),
       line_items: result.lines.map((l) => ({ description: `${l.name}${l.unit === "hour" ? " (hours)" : " (days)"}`, qty: l.qty, rate: Math.round(l.clientCents / l.qty) / 100 })),
       deposit_percent: Math.max(0, Math.min(100, depositPercent)),
     });
     await ctx.runMutation(internal.builder.patchBuild, { buildId, page: r.page, fields: r.fields, signers: r.signers });
-    await ctx.runMutation(internal.crm.linkBuild, { estimateId, buildId });
-    return { buildId };
-  },
-});
+}
 
 // ---------- the job ledger ----------
 
 type EstResult = { priceCents: number; expenseCents: number; netCents: number; lines: Array<{ kindId: string; name: string; qty: number; unit: "hour" | "day"; costCents: number }> };
 
-/** Estimate vs actual for one job. Hours (or days) logged cost what that subcontractor cost says (the one picked, or
- *  every cost for that kind of work); money logged as a cost counts as it is. The actual price is what was billed
- *  for the project (sent invoices, from the portal's copy of Stripe); before anything is billed, the estimate's price. */
-async function ledgerCalc(ctx: QueryCtx, p: Doc<"projects">, fallback: Rates) {
+/** Estimate vs actual for one job. The estimate's figures come from the rates saved with it; hours (or days) logged
+ *  cost what the business's current rates say (the subcontractor cost picked, or every cost for that kind of work;
+ *  the estimate's rates when the current ones no longer have it), the same rates the Log dialog checks against.
+ *  Money logged as a cost counts as it is. The actual price is what was billed, less refunds, once the final invoice
+ *  has gone out; until then the estimate's price, so a paid deposit doesn't read as a loss (build reading). */
+async function ledgerCalc(ctx: QueryCtx, p: Doc<"projects">, current: Rates) {
   const deal = await ctx.db.query("deals").withIndex("by_project", (q) => q.eq("projectId", p._id)).first();
   const est = (await ctx.db.query("estimates").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).sort((a, c) => c.updatedAt - a.updatedAt)[0]
     ?? (deal?.estimateId ? await ctx.db.get(deal.estimateId) : null);
-  const r = (est?.rates as Rates | undefined) ?? fallback;
+  const er = est?.rates as Rates | undefined;
+  const r = er ?? current; // the split the estimate was made with
   const e = est?.result as EstResult | undefined;
   const entries = (await ctx.db.query("ledgerEntries").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).sort((a, c) => c.date.localeCompare(a.date) || c.createdAt - a.createdAt);
   const rate = (x: Doc<"ledgerEntries">) => {
-    const c = x.costId ? r.costs.find((y) => y.id === x.costId) : null;
-    return c ? c.cents : r.costs.filter((y) => y.kindId === x.workId).reduce((t, y) => t + y.cents, 0);
+    for (const rs of [current, er]) {
+      if (!rs) continue;
+      const c = x.costId ? rs.costs.find((y) => y.id === x.costId) : null;
+      if (c) return c.cents;
+      const all = rs.costs.filter((y) => y.kindId === x.workId);
+      if (!x.costId && all.length) return all.reduce((t, y) => t + y.cents, 0);
+    }
+    return 0;
   };
   const entryCents = (x: Doc<"ledgerEntries">) => (x.kind === "cost" ? x.cents ?? 0 : Math.round((x.hours ?? 0) * rate(x)));
+  const unpriced = (x: Doc<"ledgerEntries">) => x.kind === "hours" && rate(x) === 0;
   const real = entries.filter((x) => !x.draft);
-  const kinds = r.kinds.map((k) => {
+  const allKinds = [...current.kinds, ...(er?.kinds ?? []).filter((k) => !current.kinds.some((c) => c.id === k.id))];
+  const kinds = allKinds.map((k) => {
     const mine = real.filter((x) => x.kind === "hours" && x.workId === k.id);
     const line = e?.lines.find((l) => l.kindId === k.id);
     return { id: k.id, name: k.name, unit: k.unit, estQty: line?.qty ?? 0, actQty: Math.round(mine.reduce((t, x) => t + (x.hours ?? 0), 0) * 100) / 100,
@@ -413,18 +487,19 @@ async function ledgerCalc(ctx: QueryCtx, p: Doc<"projects">, fallback: Rates) {
   });
   const otherCents = real.filter((x) => x.kind === "cost").reduce((t, x) => t + (x.cents ?? 0), 0);
   const invoices = (await ctx.db.query("invoices").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).filter((i) => !["draft", "sending", "void"].includes(i.status));
-  const billedCents = invoices.reduce((t, i) => t + i.totalCents, 0);
+  const billedCents = invoices.reduce((t, i) => t + i.totalCents - (i.refundedCents ?? 0), 0);
   const paidCents = invoices.reduce((t, i) => t + i.amountPaidCents - (i.refundedCents ?? 0), 0);
+  const finalSent = invoices.some((i) => i.kind === "final");
   const estPrice = e?.priceCents ?? 0;
-  const price = billedCents || estPrice;
+  const price = finalSent || !e ? billedCents : estPrice;
   const expense = kinds.reduce((t, k) => t + k.actCents, 0) + otherCents;
   const net = price - expense;
   const reserve = Math.round((net * r.reservePct) / 100);
   const estReserve = e ? Math.round((e.netCents * r.reservePct) / 100) : 0;
   return {
-    r, est, entries, entryCents, kinds, otherCents, billedCents, paidCents,
+    r, current, est, entries, entryCents, unpriced, kinds, otherCents, billedCents, paidCents, finalSent,
     estimate: est && e ? { _id: est._id, title: est.title, priceCents: estPrice, expenseCents: e.expenseCents, netCents: e.netCents, reserveCents: estReserve, ownerCents: e.netCents - estReserve } : null,
-    actual: { priceCents: price, billed: billedCents > 0, expenseCents: expense, netCents: net, reserveCents: reserve, ownerCents: net - reserve },
+    actual: { priceCents: price, billed: finalSent || !e, expenseCents: expense, netCents: net, reserveCents: reserve, ownerCents: net - reserve },
   };
 }
 
@@ -439,12 +514,13 @@ export const ledger = query({
     const exported = (await ctx.db.query("projects").collect()).filter((x) => x.ledgerExportedAt).length;
     return {
       project: { _id: p._id, label: label(p), clientId: p.clientId ?? null }, exportedAt: p.ledgerExportedAt ?? null, exportedJobs: exported,
-      reservePct: L.r.reservePct, kinds: L.kinds, otherCents: L.otherCents, billedCents: L.billedCents, paidCents: L.paidCents,
+      reservePct: L.r.reservePct, kinds: L.kinds, otherCents: L.otherCents, billedCents: L.billedCents, paidCents: L.paidCents, finalSent: L.finalSent,
       estimate: L.estimate, actual: L.actual,
-      costs: L.r.costs.map((c) => ({ id: c.id, name: c.name, kindId: c.kindId, cents: c.cents })),
-      entries: L.entries.map((x) => ({ _id: x._id, kind: x.kind, workId: x.workId ?? null, work: L.r.kinds.find((k) => k.id === x.workId)?.name ?? null,
-        unit: L.r.kinds.find((k) => k.id === x.workId)?.unit ?? "hour", cost: L.r.costs.find((c) => c.id === x.costId)?.name ?? null,
-        hours: x.hours ?? null, cents: L.entryCents(x), who: x.who ?? null, note: x.note ?? null, date: x.date, draft: !!x.draft, createdBy: x.createdBy ?? null })),
+      logKinds: L.current.kinds.map((k) => ({ id: k.id, name: k.name, unit: k.unit })),
+      costs: L.current.costs.map((c) => ({ id: c.id, name: c.name, kindId: c.kindId, cents: c.cents })),
+      entries: L.entries.map((x) => ({ _id: x._id, kind: x.kind, workId: x.workId ?? null, work: L.kinds.find((k) => k.id === x.workId)?.name ?? null,
+        unit: L.kinds.find((k) => k.id === x.workId)?.unit ?? "hour", cost: [...L.current.costs, ...((L.est?.rates as Rates | undefined)?.costs ?? [])].find((c) => c.id === x.costId)?.name ?? null,
+        unpriced: L.unpriced(x), hours: x.hours ?? null, cents: L.entryCents(x), who: x.who ?? null, note: x.note ?? null, date: x.date, draft: !!x.draft, createdBy: x.createdBy ?? null })),
     };
   },
 });
@@ -456,7 +532,11 @@ export const logEntry = mutation({
     if (!(await ctx.db.get(a.projectId))) throw new ConvexError("That project isn't here.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(a.date)) throw new ConvexError("Pick a date.");
     if (a.kind === "hours" && !(Number(a.hours) > 0 && Number(a.hours) <= 500)) throw new ConvexError("Hours must be more than 0.");
-    if (a.costId) { const { b } = await ownerBiz(ctx); const r = await ratesOf(ctx, b); if (!r.costs.some((c) => c.id === a.costId && (!a.workId || c.kindId === a.workId))) throw new ConvexError("Pick a cost for that kind of work."); }
+    const { b } = await ownerBiz(ctx);
+    const rr = await ratesOf(ctx, b);
+    if (a.kind === "hours" && !rr.kinds.some((k) => k.id === a.workId)) throw new ConvexError("Pick a kind of work.");
+    if (a.workId && !rr.kinds.some((k) => k.id === a.workId)) throw new ConvexError("That kind of work isn't in your rates.");
+    if (a.costId && !rr.costs.some((c) => c.id === a.costId && c.kindId === a.workId)) throw new ConvexError("Pick a cost for that kind of work.");
     if (a.kind === "cost" && !(Number.isInteger(a.cents) && a.cents! > 0)) throw new ConvexError("The cost must be more than $0.");
     return await ctx.db.insert("ledgerEntries", { projectId: a.projectId, kind: a.kind, ...(a.workId ? { workId: a.workId } : {}), ...(a.kind === "hours" && a.costId ? { costId: a.costId } : {}), ...(a.kind === "hours" ? { hours: a.hours } : { cents: a.cents }),
       ...(a.who?.trim() ? { who: a.who.trim().slice(0, 80) } : {}), ...(a.note?.trim() ? { note: a.note.trim().slice(0, 300) } : {}), date: a.date, createdBy: me.name ?? me.email, createdAt: Date.now() });
@@ -569,6 +649,7 @@ export const draftLedgerAs = internalMutation({
     if (a.work && !work) throw new ConvexError(`No kind of work called "${a.work}". Kinds: ${r.kinds.map((k) => k.name).join(", ")}.`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(a.date)) throw new ConvexError("date must be yyyy-mm-dd.");
     if (a.kind === "hours" && !(Number(a.hours) > 0 && Number(a.hours) <= 500)) throw new ConvexError("hours must be more than 0.");
+    if (a.kind === "hours" && !work) throw new ConvexError(`Hours need a kind of work (work). Kinds: ${r.kinds.map((k) => k.name).join(", ")}.`);
     if (a.kind === "cost" && !(Number.isInteger(a.cents) && a.cents! > 0)) throw new ConvexError("cost must be more than $0.");
     const id = await ctx.db.insert("ledgerEntries", { projectId: a.projectId, kind: a.kind, ...(work ? { workId: work.id } : {}), ...(a.kind === "hours" ? { hours: a.hours } : { cents: a.cents }),
       ...(a.who ? { who: a.who.slice(0, 80) } : {}), ...(a.note ? { note: a.note.slice(0, 300) } : {}), date: a.date, draft: true, createdBy: "Claude", createdAt: Date.now() });

@@ -43,7 +43,7 @@ export function FollowUpRow({ f, show, context }: { f: FollowUp; show: (m: strin
   const [busy, setBusy] = useState(false);
   const act = async (args: { confirm?: boolean; remove?: boolean }, msg: string) => {
     setBusy(true);
-    try { await done({ followUpId: f._id, ...args }); show(msg); } catch (e) { show(errText(e)); setBusy(false); }
+    try { await done({ followUpId: f._id, ...args }); show(msg); } catch (e) { show(errText(e)); } finally { setBusy(false); }
   };
   const title = /^(follow up|reply|check in|call|email)/i.test(f.who) ? f.who : `Follow up with ${f.who}`;
   const meta = [context, f.about, f.draft ? "drafted by Claude" : dueWord(f.due)].filter(Boolean).join(" · ");

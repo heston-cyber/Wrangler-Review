@@ -35,6 +35,11 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
   const [title, setTitle] = useState(""), [scope, setScope] = useState("");
   const [input, setInput] = useState<Input>({ unit: "days", amount: 0, levels: {}, extra: {}, travelOver: false, travelDays: 1, travelWaived: false });
   const [amountText, setAmountText] = useState("");
+  const [extraText, setExtraText] = useState<Record<string, string>>({});
+  const [travelText, setTravelText] = useState("1");
+  // Review (Oct 31): once a new estimate is saved, later saves (and Make contract) update that one, even if the
+  // contract step then fails.
+  const [savedId, setSavedId] = useState<Id<"estimates"> | null>((estimateId as Id<"estimates"> | undefined) ?? null);
   const [ready, setReady] = useState(!estimateId);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<null | "save" | "contract">(null);
@@ -43,7 +48,8 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
     const i = saved.input as Partial<Input> & { unit: "days" | "hours"; amount: number };
     setTitle(saved.title); setScope(saved.scope);
     setInput({ unit: i.unit, amount: i.amount, levels: i.levels ?? {}, extra: i.extra ?? {}, travelOver: !!i.travelOver, travelDays: i.travelDays ?? 1, travelWaived: !!i.travelWaived });
-    setAmountText(q(i.amount)); setReady(true);
+    setAmountText(q(i.amount)); setTravelText(String(i.travelDays ?? 1));
+    setExtraText(Object.fromEntries(Object.entries(i.extra ?? {}).map(([key, val]) => [key, q(val)]))); setReady(true);
   }, [saved, ready]);
   useEffect(() => { if (deal && !title) setTitle(deal.title); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [deal]);
   const r = rates?.rates as Rates | undefined;
@@ -66,12 +72,12 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
 
   const doSave = async () => {
     const id = await save({
-      ...(estimateId ? { estimateId: estimateId as Id<"estimates"> } : {}), ...(dealRef ? { dealId: dealRef } : {}),
+      ...(savedId ? { estimateId: savedId } : {}), ...(dealRef ? { dealId: dealRef } : {}),
       ...((saved?.clientId ?? clientId) ? { clientId: (saved?.clientId ?? clientId) as Id<"clients"> } : {}),
       ...((saved?.projectId ?? projectId) ? { projectId: (saved?.projectId ?? projectId) as Id<"projects"> } : {}),
       title: title.trim() || "Estimate", scope, input,
     });
-    setDirty(false);
+    setDirty(false); setSavedId(id);
     return id;
   };
   const onSave = async () => {
@@ -82,9 +88,10 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
   const onContract = async () => {
     setBusy("contract");
     try {
-      const id = dirty || !estimateId ? await doSave() : (estimateId as Id<"estimates">);
-      const { buildId } = await makeContract({ estimateId: id, depositPercent: DEPOSIT });
-      navigate(`/sign/b/${buildId}`);
+      const id = dirty || !savedId ? await doSave() : savedId;
+      const r = await makeContract({ estimateId: id, depositPercent: DEPOSIT });
+      if (r.kept === "signing") { show("This estimate's contract has already gone to signing, so it opens as it is. Changes here don't change it."); setTimeout(() => navigate(`/sign/b/${r.buildId}`), 1600); return; }
+      navigate(`/sign/b/${r.buildId}`);
     } catch (e) { show(errText(e)); setBusy(null); }
   };
 
@@ -141,8 +148,8 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
                           items={l.levels.map((x) => ({ key: x.id, label: `${x.name.split(",")[0]} ${q(x.mult)}×` }))} />
                       </div>
                       <div className="crm-time">
-                        <TextField label={`Extra ${target.name.toLowerCase()} hours`} inputMode="decimal" value={input.extra[target.id] ? String(input.extra[target.id]) : ""} placeholder="0"
-                          hint="For extra cuts, graphics, versions" onChange={(e) => set({ extra: { ...input.extra, [target.id]: num(e.target.value) } })} />
+                        <TextField label={`Extra ${target.name.toLowerCase()} hours`} inputMode="decimal" value={extraText[target.id] ?? ""} placeholder="0"
+                          hint="For extra cuts, graphics, versions" onChange={(e) => { setExtraText({ ...extraText, [target.id]: e.target.value }); set({ extra: { ...input.extra, [target.id]: num(e.target.value) } }); }} />
                         <span className="wp-small crm-calc">{target.name} = {q(qtyOf(base.id))} × {q(level.mult)}{input.extra[target.id] ? ` + ${q(input.extra[target.id])}` : ""} = {q(qtyOf(target.id))} hours</span>
                       </div>
                     </div>
@@ -156,7 +163,7 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
                     </div>
                     {input.travelOver && (
                       <div className="crm-time">
-                        <TextField label="Travel days" inputMode="numeric" value={String(input.travelDays)} onChange={(e) => set({ travelDays: Math.floor(num(e.target.value)) })} />
+                        <TextField label="Travel days" inputMode="numeric" value={travelText} onChange={(e) => { setTravelText(e.target.value); set({ travelDays: Math.floor(num(e.target.value)) }); }} />
                         <Checkbox checked={input.travelWaived} onChange={(v) => set({ travelWaived: v })} label="Waive the travel day fee" />
                       </div>
                     )}
