@@ -67,6 +67,14 @@ function NeedRow({ n, remind }: { n: Need; remind: (n: Extract<Need, { kind: "do
         action={<Button size="sm" loading={busy} onClick={async () => { setBusy(true); try { await remind(n); } finally { setBusy(false); } }}>Remind</Button>} />
     );
   }
+  if (n.kind === "quote") {
+    return (
+      <ListRow className="ilead" lead={{ icon: n.what === "accepted" ? "check-circle" : "close" }}
+        title={`${first(n.who)} ${n.what} quote ${n.number}`} meta={`${n.company} · ${n.title} · ${dayWord(n.at)}`}
+        titleChip={<span className="pc-only"><StatusChip tone={n.what === "accepted" ? "success" : "danger"}>{n.what === "accepted" ? "Accepted" : "Declined"}</StatusChip></span>}
+        action={<ButtonLink size="sm" variant={n.what === "accepted" ? "primary" : "secondary"} to={`/payments/quotes/${n.quoteId}`}>Open</ButtonLink>} />
+    );
+  }
   if (n.kind === "draft") {
     return (
       <ListRow className="ilead" lead={{ icon: "mail" }}

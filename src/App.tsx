@@ -46,6 +46,11 @@ const ClientSubscription = lazy(() => import("./modules/payments/ClientSubscript
 const ClientSubscriptions = lazy(() => import("./modules/payments/ClientSubscription").then((m) => ({ default: m.ClientSubscriptions })));
 const PlanEditor = lazy(() => import("./modules/payments/PlansPage").then((m) => ({ default: m.PlanEditor })));
 const ClientInvoice = lazy(() => import("./modules/payments/ClientInvoice"));
+// Phase 3b: Quick quotes (Payments › Quotes) and the no-account quote page /q/<token> (D81).
+const QuotesPage = lazy(() => import("./modules/payments/Quotes"));
+const QuoteEditor = lazy(() => import("./modules/payments/Quotes").then((m) => ({ default: m.QuoteEditor })));
+const QuoteDetail = lazy(() => import("./modules/payments/Quotes").then((m) => ({ default: m.QuoteDetail })));
+const ClientQuote = lazy(() => import("./modules/payments/ClientQuote"));
 const ClientInvoices = lazy(() => import("./modules/payments/ClientInvoices"));
 // Wrangler Sign (S1): its own chunk, so pdf.js only loads on those pages.
 const SignHome = lazy(() => import("./modules/docs/pages/SignHome"));
@@ -111,6 +116,9 @@ export default function App() {
     const page = (inShell: boolean) => <Suspense fallback={<Loading />}><ClientSubscription key={subLink[1]} token={subLink[1]} inShell={inShell} /></Suspense>;
     return isAuthenticated ? <ShareForMember video={false} page={page} /> : page(false);
   }
+  // Phase 3b: a quote link (email 18's "View and accept"), no account needed; the same page signed in or out.
+  const quoteLink = /^\/q\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
+  if (quoteLink) return <Suspense fallback={<Loading />}><ClientQuote key={quoteLink[1]} token={quoteLink[1]} /></Suspense>;
   // An invoice link (Part B step 3, the "View and pay" button in email 08) works signed in or out too.
   const invoice = /^\/i\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
   if (invoice) {
@@ -162,6 +170,9 @@ function SignedIn() {
   else if (/^\/payments\/subscriptions\/?$/.test(path)) page = <Suspense fallback={<Loading />}><SubscriptionsPage /></Suspense>;
   else if (/^\/payments\/subscriptions\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><StartSubscription key={search} clientId={params.get("client")} /></Suspense>;
   else if (/^\/payments\/subscriptions\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><SubscriptionDetail key={id} subscriptionId={id} /></Suspense>; }
+  else if (/^\/payments\/quotes\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuotesPage /></Suspense>;
+  else if (/^\/payments\/quotes\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuoteEditor key={search} clientId={params.get("client")} dealId={params.get("deal")} /></Suspense>;
+  else if (/^\/payments\/quotes\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><QuoteDetail key={id} quoteId={id} /></Suspense>; }
   else if (/^\/payments\/plans\/?$/.test(path)) page = <Suspense fallback={<Loading />}><PlansPage /></Suspense>;
   else if (/^\/payments\/plans\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><PlanEditor key="new" /></Suspense>;
   else if (/^\/payments\/plans\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><PlanEditor key={id} planId={id} /></Suspense>; }

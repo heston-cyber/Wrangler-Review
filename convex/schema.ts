@@ -715,6 +715,7 @@ export default defineSchema({
     // Phase 3: Settings › Estimate rates (lib/estimate.ts Rates). Missing: Wrangler's from me-wrangler § 4, others empty.
     estimateRates: v.optional(v.any()),
     brandKit: v.optional(v.any()),           // Phase 3b (D71): Settings › Brand kit (convex/brandKit.ts)
+    quoteSeq: v.optional(v.number()),        // Phase 3b: the last quote number used (D74)
     // Phase 2b (D64): when Stripe's last retry of a subscription payment fails: keep it past due (default) or cancel it.
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))),
     // Phase 2 Part B step 4 (D51): automatic invoice reminders, off until the owner turns them on (that's their OK).
@@ -782,6 +783,41 @@ export default defineSchema({
     createdBy: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_client", ["clientId"]).index("by_deal", ["dealId"]),
+
+  // Phase 3b (Oct 31): Quick quotes (Payments › Quotes). A quote has its own number (WRNGLR-Q-0001, D74), lines like an
+  // invoice's, a deposit and a valid-until date. Sent, it gets a long random token: the client's page at /q/<token>
+  // (no account, D81) where they accept or decline, recorded with name, time, IP and device. Nothing converts or moves
+  // on its own (D84): the owner answers each prompt.
+  quotes: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    number: v.string(),
+    seq: v.number(),
+    status: v.union(v.literal("draft"), v.literal("sent"), v.literal("accepted"), v.literal("declined"), v.literal("void")),
+    clientId: v.optional(v.id("clients")),
+    dealId: v.optional(v.id("deals")),
+    projectId: v.optional(v.id("projects")),
+    contact: v.object({ name: v.string(), email: v.string(), company: v.optional(v.string()) }),
+    title: v.string(),
+    lines: v.array(v.object({ id: v.string(), description: v.string(), qty: v.number(), unitCents: v.number(), suggestedCents: v.optional(v.number()), note: v.optional(v.string()) })),
+    discountCents: v.optional(v.number()),
+    taxPercent: v.optional(v.number()),
+    deposit: v.object({ kind: v.union(v.literal("percent"), v.literal("amount")), value: v.number() }),
+    validUntil: v.string(),                       // yyyy-mm-dd
+    terms: v.optional(v.string()),
+    questions: v.optional(v.any()),               // the quick questions' answers (what's the job, days, level)
+    totalCents: v.number(),
+    token: v.optional(v.string()),
+    sentAt: v.optional(v.number()),
+    viewedAt: v.optional(v.number()),
+    response: v.optional(v.object({ kind: v.union(v.literal("accepted"), v.literal("declined")), name: v.string(), reason: v.optional(v.string()), at: v.number(), ip: v.optional(v.string()), userAgent: v.optional(v.string()) })),
+    asked: v.optional(v.object({ move: v.optional(v.union(v.literal("yes"), v.literal("no"))), draft: v.optional(v.union(v.literal("done"), v.literal("later"))), seen: v.optional(v.boolean()) })),
+    made: v.optional(v.object({ buildId: v.optional(v.id("wsBuilds")), invoiceId: v.optional(v.id("invoices")) })),
+    voidedAt: v.optional(v.number()),
+    history: v.array(v.object({ kind: v.string(), at: v.number(), by: v.optional(v.string()), detail: v.optional(v.string()) })),
+    createdBy: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_token", ["token"]).index("by_client", ["clientId"]).index("by_deal", ["dealId"]).index("by_updated", ["updatedAt"]),
 
   // The job ledger (a project tab): hours and costs logged against the project, compared with its estimate.
   ledgerEntries: defineTable({

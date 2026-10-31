@@ -92,6 +92,10 @@ const PAGES: Record<string, { pages: Page[]; args: (ids: Ids, share: Share | nul
   "crm.getEstimate": { pages: ["owner"], args: () => "skip" }, // an estimate
   "crm.ledger": { pages: ["owner"], args: () => "skip" }, // a project's Ledger tab
   "crm.rates": { pages: ["owner"], args: () => "skip" }, // Settings › Estimate rates, the estimate page
+  "quotes.list": { pages: ["owner"], args: () => "skip" }, // Payments › Quotes
+  "quotes.get": { pages: ["owner"], args: () => "skip" }, // a quote
+  "quotes.options": { pages: ["owner"], args: () => "skip" }, // New quote's client picker
+  "quotes.page": { pages: ["share"], args: () => ({ token: "x".repeat(24) }) }, // /q/<token>, no account (D81)
   "brandKit.get": { pages: ["owner"], args: () => "skip" }, // Settings › Brand kit, a company's Brand kit tab (Phase 3b)
   "subscriptions.get": { pages: ["owner"], args: () => "skip" }, // a subscription
   "subscriptions.page": { pages: ["share"], args: () => ({ token: "not-a-real-token-xx" }) }, // /sub/<token>, the client's page (with or without an account)

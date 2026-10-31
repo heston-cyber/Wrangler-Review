@@ -322,6 +322,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
   const actions = (
     <>
       <Button onClick={() => setFollowing(true)}>Add follow-up</Button>
+      <ButtonLink to={`/payments/quotes/new?client=${clientId}`}>Quick quote</ButtonLink>
       <ButtonLink variant="primary" to={`/clients/estimates/new?client=${clientId}`}>New estimate</ButtonLink>
     </>
   );

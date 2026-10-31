@@ -16,6 +16,7 @@ import type * as invoicePay from "../invoicePay.js";
 import type * as invoiceReminders from "../invoiceReminders.js";
 import type * as brandKit from "../brandKit.js";
 import type * as crm from "../crm.js";
+import type * as quotes from "../quotes.js";
 import type * as leads from "../leads.js";
 import type * as plans from "../plans.js";
 import type * as subscriptionClock from "../subscriptionClock.js";
@@ -127,6 +128,7 @@ declare const fullApi: ApiFromModules<{
   invoiceReminders: typeof invoiceReminders;
   brandKit: typeof brandKit;
   crm: typeof crm;
+  quotes: typeof quotes;
   leads: typeof leads;
   plans: typeof plans;
   subscriptionClock: typeof subscriptionClock;
