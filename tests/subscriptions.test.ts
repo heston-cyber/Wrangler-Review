@@ -361,3 +361,12 @@ describe("review fixes (Oct 30)", () => {
     expect((await w.heston.query(api.invoices.list, {})).filter((i: { kind: string }) => i.kind === "subscription")).toEqual([]);
   });
 });
+
+describe("the sandbox clock check", () => {
+  test("refuses a live key", async () => {
+    const w = await world();
+    process.env.STRIPE_PLATFORM_KEY = "rk_live_x";
+    await expect(w.t.action(anyApi.subscriptionClock.clockCheck, {})).rejects.toThrow(/only with a Stripe test/);
+    process.env.STRIPE_PLATFORM_KEY = "sk_test_platform";
+  });
+});
