@@ -11,6 +11,7 @@ import type { QueryCtx } from "./_generated/server";
 import { docLabel, OWNER_KEY } from "./lib/wsLayout";
 import { REQUEST_TTL, stillFits } from "./sign";
 import { quoteNeeds } from "./quotes";
+import { proposalNeeds } from "./proposals";
 
 const MAX_NOTE_GROUPS = 10;
 
@@ -19,7 +20,8 @@ export type Need =
   | { kind: "doc"; at: number; documentId: Id<"wsDocuments">; label: string; title: string; waitingOn: string[]; signerKey: string; sentAt: number; client: string | null; lastEmailAt: number | null }
   | { kind: "draft"; at: number; noteId: Id<"inboxNotes">; title: string; client: string | null }
   | { kind: "request"; at: number; documentId: Id<"wsDocuments">; label: string; title: string; what: "approve" | "send" | "cancel" }
-  | { kind: "quote"; at: number; quoteId: Id<"quotes">; number: string; company: string; title: string; what: "accepted" | "declined"; who: string }; // Phase 3b
+  | { kind: "quote"; at: number; quoteId: Id<"quotes">; number: string; company: string; title: string; what: "accepted" | "declined"; who: string } // Phase 3b
+  | { kind: "proposal"; at: number; proposalId: Id<"proposals">; number: string; company: string; title: string; what: "accepted" | "declined"; who: string }; // Phase 3b
 
 /** The client a document belongs to: the client of its first signer that's one of a client's people. */
 export async function docClient(ctx: QueryCtx, emails: string[]) {
@@ -81,7 +83,8 @@ export const needs = query({
 
     // Phase 3b: a quote the client answered, until the owner drafts from it (accepted) or has seen it (declined).
     out.push(...(await quoteNeeds(ctx)));
-    const order = { quote: 0, notes: 1, doc: 2, draft: 3, request: 4 } as const;
+    out.push(...(await proposalNeeds(ctx))); // and a proposal, until the contract starts / Not now (accepted) or it's seen (declined)
+    const order = { proposal: 0, quote: 0, notes: 1, doc: 2, draft: 3, request: 4 } as const;
     return out.sort((a, b) => order[a.kind] - order[b.kind] || b.at - a.at);
   },
 });

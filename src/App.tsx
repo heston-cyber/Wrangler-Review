@@ -52,6 +52,12 @@ const QuoteEditor = lazy(() => import("./modules/payments/Quotes").then((m) => (
 const QuoteDetail = lazy(() => import("./modules/payments/Quotes").then((m) => ({ default: m.QuoteDetail })));
 const ClientQuote = lazy(() => import("./modules/payments/ClientQuote"));
 const ClientInvoices = lazy(() => import("./modules/payments/ClientInvoices"));
+// Phase 3b: Proposals (D69) in their own chunk with the builder, and the no-account proposal page /p/<token> (D73).
+const ProposalsPage = lazy(() => import("./modules/proposals/Proposals"));
+const NewProposal = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.NewProposal })));
+const ProposalTemplates = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalTemplates })));
+const ProposalBuilder = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalBuilder })));
+const ClientProposal = lazy(() => import("./modules/proposals/ClientProposal"));
 // Wrangler Sign (S1): its own chunk, so pdf.js only loads on those pages.
 const SignHome = lazy(() => import("./modules/docs/pages/SignHome"));
 const SignDocs = lazy(() => import("./modules/docs/pages/SignDocs"));
@@ -119,6 +125,9 @@ export default function App() {
   // Phase 3b: a quote link (email 18's "View and accept"), no account needed; the same page signed in or out.
   const quoteLink = /^\/q\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
   if (quoteLink) return <Suspense fallback={<Loading />}><ClientQuote key={quoteLink[1]} token={quoteLink[1]} /></Suspense>;
+  // Phase 3b: a proposal link (email 19's "View proposal"), no account needed; the same page signed in or out.
+  const proposalLink = /^\/p\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
+  if (proposalLink) return <Suspense fallback={<Loading />}><ClientProposal key={proposalLink[1]} token={proposalLink[1]} /></Suspense>;
   // An invoice link (Part B step 3, the "View and pay" button in email 08) works signed in or out too.
   const invoice = /^\/i\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
   if (invoice) {
@@ -185,6 +194,11 @@ function SignedIn() {
   else if (/^\/sign\/templates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3] as Id<"wsTemplates">; page = <Suspense fallback={<Loading />}><Builder key={id} mode={{ kind: "template", templateId: id }} /></Suspense>; }
   else if (/^\/sign\/templates\/?$/.test(path)) page = <Suspense fallback={<Loading />}><SignTemplates /></Suspense>;
   else if (path.startsWith("/sign")) page = <Suspense fallback={<Loading />}><SignHome /></Suspense>;
+  else if (/^\/proposals\/?$/.test(path)) page = <Suspense fallback={<Loading />}><ProposalsPage /></Suspense>;
+  else if (/^\/proposals\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><NewProposal key={search} clientId={params.get("client")} dealId={params.get("deal")} /></Suspense>;
+  else if (/^\/proposals\/templates\/?$/.test(path)) page = <Suspense fallback={<Loading />}><ProposalTemplates /></Suspense>;
+  else if (/^\/proposals\/templates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3] as Id<"wsTemplates">; page = <Suspense fallback={<Loading />}><Builder key={id} mode={{ kind: "template", templateId: id, proposal: true }} /></Suspense>; }
+  else if (/^\/proposals\/[^/]+\/?$/.test(path)) { const id = path.split("/")[2]; page = <Suspense fallback={<Loading />}><ProposalBuilder key={id} proposalId={id} /></Suspense>; }
   else if (/^\/clients\/pipeline\/?$/.test(path)) page = <Suspense fallback={<Loading />}><Pipeline /></Suspense>;
   else if (/^\/clients\/follow-ups\/?$/.test(path)) page = <Suspense fallback={<Loading />}><FollowUps /></Suspense>;
   else if (/^\/clients\/deals\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><DealPage key={id} dealId={id} /></Suspense>; }

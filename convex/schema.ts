@@ -481,6 +481,7 @@ export default defineSchema({
     style: v.any(),
     signers: v.any(),                       // client signers (name, email, title) for when it's sent
     templateId: v.optional(v.id("wsTemplates")),
+    kind: v.optional(v.literal("proposal")),  // Phase 3b: a proposal (Proposals), never a contract; kept out of Docs
     documentId: v.optional(v.id("wsDocuments")), // set once it has gone to signing
     renderedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -490,6 +491,7 @@ export default defineSchema({
     businessId: v.optional(v.id("businesses")), // Phase 0.5d step 2; required from step 3
     name: v.string(),
     description: v.optional(v.string()),
+    kind: v.optional(v.literal("proposal")),  // Phase 3b: a proposal template, kept apart from contract templates
     blocks: v.any(),
     fields: v.any(),
     style: v.any(),
@@ -716,6 +718,7 @@ export default defineSchema({
     estimateRates: v.optional(v.any()),
     brandKit: v.optional(v.any()),           // Phase 3b (D71): Settings › Brand kit (convex/brandKit.ts)
     quoteSeq: v.optional(v.number()),        // Phase 3b: the last quote number used (D74)
+    proposalSeq: v.optional(v.number()),     // Phase 3b: the last proposal number used (D85)
     // Phase 2b (D64): when Stripe's last retry of a subscription payment fails: keep it past due (default) or cancel it.
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))),
     // Phase 2 Part B step 4 (D51): automatic invoice reminders, off until the owner turns them on (that's their OK).
@@ -818,6 +821,40 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_token", ["token"]).index("by_client", ["clientId"]).index("by_deal", ["dealId"]).index("by_updated", ["updatedAt"]),
+
+  // Phase 3b · Proposals (D69): a written pitch made in the builder (its wsBuilds row, kind "proposal"), numbered
+  // {prefix}-P-0001 (D85). Sending freezes the PDF, the contact and the totals; the client reads it at /p/<token> and
+  // accepts or declines (D73, D86), recorded like quotes. Nothing moves or converts on its own (D84).
+  proposals: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    buildId: v.id("wsBuilds"),
+    number: v.string(),
+    seq: v.number(),
+    status: v.union(v.literal("draft"), v.literal("waiting"), v.literal("ready"), v.literal("sent"), v.literal("accepted"), v.literal("declined"), v.literal("void")),
+    templateId: v.optional(v.id("wsTemplates")),
+    clientId: v.optional(v.id("clients")),
+    dealId: v.optional(v.id("deals")),
+    contact: v.optional(v.object({ name: v.string(), email: v.string(), company: v.optional(v.string()) })), // frozen when sent
+    fromName: v.optional(v.string()),            // who replies go to (the business contact), frozen when sent
+    totalCents: v.optional(v.number()),          // frozen when sent
+    depositCents: v.optional(v.number()),
+    depositPct: v.optional(v.number()),
+    lineCount: v.optional(v.number()),
+    pdfId: v.optional(v.id("_storage")),         // the PDF as sent
+    message: v.optional(v.string()),
+    drafted: v.optional(v.literal("claude")),    // Step 4: Claude wrote the draft (the review banner)
+    token: v.optional(v.string()),
+    sentAt: v.optional(v.number()),
+    viewedAt: v.optional(v.number()),
+    response: v.optional(v.object({ kind: v.union(v.literal("accepted"), v.literal("declined")), name: v.string(), reason: v.optional(v.string()), at: v.number(), ip: v.optional(v.string()), userAgent: v.optional(v.string()) })),
+    asked: v.optional(v.object({ move: v.optional(v.union(v.literal("yes"), v.literal("no"))), contract: v.optional(v.union(v.literal("done"), v.literal("later"))), seen: v.optional(v.boolean()) })),
+    made: v.optional(v.object({ buildId: v.optional(v.id("wsBuilds")) })),
+    voidedAt: v.optional(v.number()),
+    history: v.array(v.object({ kind: v.string(), at: v.number(), by: v.optional(v.string()), detail: v.optional(v.string()) })),
+    createdBy: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_token", ["token"]).index("by_build", ["buildId"]).index("by_client", ["clientId"]).index("by_deal", ["dealId"]).index("by_updated", ["updatedAt"]),
 
   // The job ledger (a project tab): hours and costs logged against the project, compared with its estimate.
   ledgerEntries: defineTable({

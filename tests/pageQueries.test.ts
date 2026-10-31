@@ -96,6 +96,10 @@ const PAGES: Record<string, { pages: Page[]; args: (ids: Ids, share: Share | nul
   "quotes.get": { pages: ["owner"], args: () => "skip" }, // a quote
   "quotes.options": { pages: ["owner"], args: () => "skip" }, // New quote's client picker
   "quotes.page": { pages: ["share"], args: () => ({ token: "x".repeat(24) }) }, // /q/<token>, no account (D81)
+  "proposals.list": { pages: ["owner"], args: () => "skip" }, // Proposals › All proposals
+  "proposals.get": { pages: ["owner"], args: () => "skip" }, // a proposal in the builder
+  "proposals.templates": { pages: ["owner"], args: () => "skip" }, // Proposals › Templates, New proposal
+  "proposals.page": { pages: ["share"], args: () => ({ token: "x".repeat(24) }) }, // /p/<token>, no account (D73)
   "brandKit.get": { pages: ["owner"], args: () => "skip" }, // Settings › Brand kit, a company's Brand kit tab (Phase 3b)
   "subscriptions.get": { pages: ["owner"], args: () => "skip" }, // a subscription
   "subscriptions.page": { pages: ["share"], args: () => ({ token: "not-a-real-token-xx" }) }, // /sub/<token>, the client's page (with or without an account)

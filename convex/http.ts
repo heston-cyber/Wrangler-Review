@@ -8,6 +8,7 @@ import { stop as emailStop } from "./emails";
 import { og } from "./og";
 import { ip as wsS0Ip } from "./wsS0";
 import { respond as quoteRespond } from "./quotes";
+import { respond as proposalRespond } from "./proposals";
 import { api as wsApi, preflight as wsPreflight } from "./signing";
 import { verifyHttp as wsVerify } from "./signDone";
 import { callback as wsDropboxCallback } from "./wsArchive";
@@ -63,6 +64,9 @@ http.route({ path: "/leads/webflow", method: "POST", handler: webflowLeads });
 // Phase 3b: accepting or declining a quote on /q/<token> (no account; recorded with name, time, IP and device).
 http.route({ path: "/q-respond", method: "POST", handler: quoteRespond });
 http.route({ path: "/q-respond", method: "OPTIONS", handler: wsPreflight });
+// Phase 3b: the same for a proposal on /p/<token> (D73, D86).
+http.route({ path: "/p-respond", method: "POST", handler: proposalRespond });
+http.route({ path: "/p-respond", method: "OPTIONS", handler: wsPreflight });
 http.route({ path: "/email/stop", method: "GET", handler: emailStop });
 http.route({ path: "/email/stop", method: "POST", handler: emailStop });
 

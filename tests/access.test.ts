@@ -45,6 +45,8 @@ const OPEN: Record<string, string> = {
   "invoicePay.markViewed": "the same link: records the first view of that invoice only; a missing token does nothing",
   "quotes.page": "a quote link (Phase 3b, D81): answers only for a sent quote's own long random token (tested in crm.test.ts)",
   "quotes.markViewed": "the same link: records the first view of that quote only; a missing token does nothing",
+  "proposals.page": "a proposal link (Phase 3b, D73): answers only for a sent proposal's own long random token (tested in proposals.test.ts)",
+  "proposals.markViewed": "the same link: records the first view of that proposal only; a missing token does nothing",
   "invoicePay.start": "Pay on the same link: returns Stripe's payment secret for that invoice only; a missing token is refused",
   "invoicePay.refresh": "the same link: re-reads that invoice from Stripe; a missing token does nothing",
   "invoicePay.mine": "a client's invoices, found by their own email; anyone else gets []",
