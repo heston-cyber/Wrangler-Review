@@ -42,11 +42,12 @@ const OWNER_PAYMENTS: Sub[] = [{ to: "/payments", label: "Overview", match: (p) 
   { to: "/payments/quotes", label: "Quotes", match: (p) => starts(p, "/payments/quotes") }, // Phase 3b
   { to: "/payments/subscriptions", label: "Subscriptions", match: (p) => starts(p, "/payments/subscriptions") }, { to: "/payments/plans", label: "Plans", match: (p) => starts(p, "/payments/plans") }];
 const inPayments = (p: string) => starts(p, "/payments");
-// Phase 3b (D69): Proposals is its own item with a layer. Questionnaire joins in Step 4.
+// Phase 3b (D69): Proposals is its own item with a layer.
 const OWNER_PROPOSALS: Sub[] = [
   { to: "/proposals/new", label: "New proposal", match: (p) => starts(p, "/proposals/new") },
-  { to: "/proposals", label: "All proposals", match: (p) => starts(p, "/proposals") && !starts(p, "/proposals/new", "/proposals/templates") },
+  { to: "/proposals", label: "All proposals", match: (p) => starts(p, "/proposals") && !starts(p, "/proposals/new", "/proposals/templates", "/proposals/questionnaire") },
   { to: "/proposals/templates", label: "Templates", match: (p) => starts(p, "/proposals/templates") },
+  { to: "/proposals/questionnaire", label: "Questionnaire", match: (p) => starts(p, "/proposals/questionnaire") },
 ];
 const inProposals = (p: string) => starts(p, "/proposals");
 // Phase 3 (Heston, Oct 29): Clients becomes a layer: Pipeline · Companies · Follow-ups. Companies is the client list.

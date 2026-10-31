@@ -87,6 +87,7 @@ export default function Builder({ mode }: { mode: Mode }) {
   const proposalLater = useMutation(api.proposals.later);
   const withdrawProposal = useMutation(api.proposals.withdraw);
   const copyProposal = useMutation(api.proposals.copy);
+  const dismissDrafted = useMutation(api.proposals.dismissDrafted);
   const [toast, show] = useToast();
   const [sending, setSending] = useState(false);
   const [contracting, setContracting] = useState(false);
@@ -441,7 +442,7 @@ export default function Builder({ mode }: { mode: Mode }) {
 
         {/* The page */}
         <div className="wsb-stage" ref={stageRef}>
-          {prop && <ProposalBanner p={prop} busy={busy} onContract={() => setContracting(true)} onLater={() => void proposalLater({ proposalId: prop._id, what: "contract" }).catch((e) => show(errText(e)))}
+          {prop && <ProposalBanner p={prop} busy={busy} onDismiss={() => void dismissDrafted({ proposalId: prop._id }).catch((e) => show(errText(e)))} onContract={() => setContracting(true)} onLater={() => void proposalLater({ proposalId: prop._id, what: "contract" }).catch((e) => show(errText(e)))}
             onWithdraw={async () => { try { await withdrawProposal({ proposalId: prop._id }); show("Withdrawn. The link now says so."); } catch (e) { show(errText(e)); } }} onCopy={() => void onCopy()} />}
           {sent && <div className="wp-notice ws-banner"><Icon name="lock" size={20} /><span className="txt">{build!.document!.label} is {build!.document!.status === "sent" ? "out for signature" : "signed"}. Changes here won't reach it; cancel it first to send a new version.</span></div>}
           <div className={`wsb-page${picking ? " wsb-picking" : ""}`}
@@ -485,7 +486,8 @@ export default function Builder({ mode }: { mode: Mode }) {
             <div className="wsb-pane">
               <span className="wsb-hint">{phone ? "Tap to add after the cursor, or press and hold to drag onto the page" : "Drag onto the page (or into a container), or click to add after the cursor"}</span>
               {INSERT.filter((x) => !isProp || (x.kind !== "parties" && x.kind !== "signatures")).map((x) => <button key={x.kind} className="wsb-insert" draggable onDragStart={(e) => dragNodes(e, newNodes(x.kind))} onDragEnd={() => endInsertDrag(editor)} {...touch.item(() => newNodes(x.kind), INSERT_LABEL[x.kind])} onClick={() => { if (touch.justDropped()) return; if (editor) insertKind(editor, x.kind); if (phone) setSheet(false); }}>{x.icon}<span><b>{INSERT_LABEL[x.kind]}</b><span className="secondary">{x.hint}</span></span></button>)}
-              <ClauseLibrary clauses={clauses} onInsert={(c) => { if (touch.justDropped()) return; if (editor) insertNodes(editor, [clauseSection(c)]); if (phone) setSheet(false); }} onDragStart={(e, c) => dragNodes(e, [clauseSection(c)])} onDragEnd={() => endInsertDrag(editor)} touchProps={(c) => touch.item(() => [clauseSection(c)], c.title)} />
+              {prop && <PitchDeck p={prop} show={show} />}
+              {!isProp && <ClauseLibrary clauses={clauses} onInsert={(c) => { if (touch.justDropped()) return; if (editor) insertNodes(editor, [clauseSection(c)]); if (phone) setSheet(false); }} onDragStart={(e, c) => dragNodes(e, [clauseSection(c)])} onDragEnd={() => endInsertDrag(editor)} touchProps={(c) => touch.item(() => [clauseSection(c)], c.title)} />}
             </div>
           )}
           {tab === "format" && <FormatPanel editor={editor} accent={st.accent} onSaveClause={(sec) => void onSaveClause(sec)} />}
@@ -648,8 +650,15 @@ function SaveTemplate({ doc, proposal, onClose, onSave }: { doc: BuildDoc; propo
 
 // ---------- Phase 3b: the proposal's banner and dialogs ----------
 
-function ProposalBanner({ p, busy, onContract, onLater, onWithdraw, onCopy }: { p: ProposalInfo; busy: string | null; onContract: () => void; onLater: () => void; onWithdraw: () => void; onCopy: () => void }) {
+function ProposalBanner({ p, busy, onContract, onLater, onWithdraw, onCopy, onDismiss }: { p: ProposalInfo; busy: string | null; onContract: () => void; onLater: () => void; onWithdraw: () => void; onCopy: () => void; onDismiss: () => void }) {
   const r = p.response;
+  if (P_OPEN.has(p.status) && p.drafted === "claude") return (
+    <div className="wp-notice warn pr-banner">
+      <Icon name="note" size={20} />
+      <span className="txt"><b>Drafted by Claude: review before sending</b><span>Claude wrote this from the questionnaire answers. Check every section and every price before you send it.</span></span>
+      <button type="button" className="btn ghost sm" onClick={onDismiss}>Dismiss</button>
+    </div>
+  );
   if (p.status === "accepted" && r) return (
     <div className="wp-notice pr-banner ok">
       <Icon name="check-circle" size={20} />
@@ -733,5 +742,49 @@ function StartContract({ p, doc, onClose, onStart }: { p: ProposalInfo; doc: Bui
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** The Insert panel's Pitch deck part (716:4980) and its dialog (717:4428, D72): Claude makes a Claude Slides deck on
+ *  the owner's own computer through the Sign connector, in the business's brand kit or the client's. */
+function PitchDeck({ p, show }: { p: ProposalInfo; show: (m: string) => void }) {
+  const setDeck = useMutation(api.proposals.setDeck);
+  const [open, setOpen] = useState(false);
+  const kit = p.deck?.kit ?? (p.client ? "client" : "business");
+  const company = p.who.company || p.client?.name || "";
+  const poss = company ? `${company}${/s$/i.test(company) ? "'" : "'s"}` : "the client's";
+  const whose = kit === "client" ? `${poss} brand kit` : "your brand kit (Settings › Brand kit)";
+  const phrase = `Make a pitch deck for proposal ${p.number} in Wrangler Portal`;
+  const [note, setNote] = useState(p.deck?.note ?? "");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="pr-deck">
+      <span className="wp-eyebrow">Pitch deck</span>
+      <span className="wsb-hint">Brand kit for the deck</span>
+      <span className="pr-kitseg" role="group" aria-label="Brand kit for the deck">
+        {(["business", "client"] as const).map((k) => <button key={k} type="button" aria-pressed={kit === k} onClick={() => void setDeck({ proposalId: p._id, kit: k }).catch((e) => show(errText(e)))}>{k === "business" ? "Business" : "Client"}</button>)}
+      </span>
+      <span className="wsb-hint">Uses {whose}.</span>
+      <button type="button" className="btn pr-deckbtn" onClick={() => setOpen(true)}>Make a pitch deck</button>
+      <span className="wsb-hint">Claude makes a Claude Slides deck on your computer from this proposal. It exports to PowerPoint or PDF.</span>
+      {open && (
+        <Modal onClose={() => setOpen(false)} label="Make a pitch deck" width={560}>
+          <div className="crm-dialog">
+            <DialogHeader eyebrow={`Pitch deck · ${p.number}`} title="Make a pitch deck." body={`Claude makes a Claude Slides deck on your computer, from this proposal, in ${whose}. It exports to PowerPoint or PDF. Say this in your Claude app:`} onClose={() => setOpen(false)} />
+            <div className="qz-phrase"><span>“{phrase}”</span><button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(phrase).then(() => show("Copied"), () => show("Couldn't copy"))}>Copy</button></div>
+            <span className="wp-eyebrow pr-carries">Claude gets</span>
+            <ul className="pr-gets">
+              <li><Icon name="check" size={14} plain />The proposal: every section and the investment</li>
+              <li><Icon name="check" size={14} plain />{kit === "client" ? poss.replace(/^the/, "The") : "Your"} brand kit: logo, colours, fonts, files, links, tone words</li>
+              <li><Icon name="check" size={14} plain />Your note below, if you add one</li>
+            </ul>
+            <TextArea label="A note for Claude (optional)" rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Keep it to 8 slides. Lead with last year's recap." />
+            <div className="dfoot">
+              <Button variant="primary" loading={busy} onClick={async () => { setBusy(true); try { await setDeck({ proposalId: p._id, kit, note, asked: true }); setOpen(false); } catch (e) { show(errText(e)); } finally { setBusy(false); } }}>Done</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }

@@ -14,6 +14,7 @@ import { linkProps, navigate } from "../../lib/router";
 import { errText } from "../docs/pages/common";
 import { dateShort, money } from "../payments/common";
 import Builder, { ProposalChip } from "../docs/builder/Builder";
+import { ProposalWaiting, QuestionnaireRunner } from "./Questionnaire";
 
 type Status = "draft" | "waiting" | "ready" | "sent" | "accepted" | "declined" | "void";
 const updatedWord = (t: number) => {
@@ -38,7 +39,7 @@ export default function ProposalsPage() {
     const when = s === "accepted" && r.response ? `accepted ${dateShort(r.response.at)} by ${r.response.name}`
       : s === "declined" && r.response ? `declined ${dateShort(r.response.at)}`
       : s === "sent" ? [r.sentAt ? `sent ${dateShort(r.sentAt)}` : null, r.viewedAt ? `viewed ${dateShort(r.viewedAt)}` : null].filter(Boolean).join(" · ")
-      : s === "void" ? "withdrawn" : `updated ${updatedWord(r.updatedAt)}`;
+      : s === "void" ? "withdrawn" : r.filling ? "questionnaire in progress" : `updated ${updatedWord(r.updatedAt)}`;
     return [who || "No client yet", r.number, when].filter(Boolean).join(" · ");
   };
   const pills: Array<{ key: Pill; label: string; count: number }> = [
@@ -50,7 +51,7 @@ export default function ProposalsPage() {
     <>
       <TopBar><a {...linkProps("/proposals")}>Proposals</a><Sep /><span className="here">All proposals</span></TopBar>
       <div className="wp-page">
-        <PageHeader eyebrow="Proposals" title="All proposals." sub="Written pitches, made in the builder. Clients read and accept them from a link." actions={<ButtonLink variant="primary" to="/proposals/new">New proposal</ButtonLink>} />
+        <PageHeader eyebrow="Proposals" title="All proposals." sub="Written pitches, made in the builder. Clients read and accept them from a link." actions={<><ButtonLink to="/proposals/questionnaire">Questionnaire</ButtonLink><ButtonLink variant="primary" to="/proposals/new">New proposal</ButtonLink></>} />
         {rows === undefined ? <Card label="Loading"><SkeletonRows n={4} /></Card> : rows.length === 0 ? (
           <EmptyState icon="quote" title="No proposals yet." body="A proposal is a written pitch: scope, deliverables, timeline and the investment. Start one from a template or the standard sections; the client reads it and presses Accept, no account needed."
             actions={<ButtonLink variant="primary" to="/proposals/new">New proposal</ButtonLink>} />
@@ -78,6 +79,7 @@ export function NewProposal({ clientId, dealId }: { clientId: string | null; dea
   const templates = useQuery(api.proposals.templates, {});
   const rows = useQuery(api.proposals.list, {});
   const create = useMutation(api.proposals.create);
+  const startQ = useMutation(api.proposals.startQuestionnaire);
   const drop = useMutation(api.proposals.deleteDraft);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, show] = useToast();
@@ -94,14 +96,14 @@ export function NewProposal({ clientId, dealId }: { clientId: string | null; dea
     <>
       <TopBar><a {...linkProps("/proposals")}>Proposals</a><Sep /><span className="here">New proposal</span></TopBar>
       <div className="wp-page">
-        <PageHeader title="New proposal." sub="Start from one of your templates or begin with the standard sections." />
+        <PageHeader title="New proposal." sub="Start from one of your templates, answer the questionnaire, or begin with a blank page." />
         <div className="pr-choose">
           <button type="button" className="pr-choice glass on" onClick={scrollToTemplates} disabled={!!busy}>
             <Icon name="folder" size={20} /><b>From a template</b><span>Pick one of your proposal templates below. Its sections come filled in.</span>
           </button>
-          <div className="pr-choice glass off" aria-disabled="true">
-            <Icon name="note" size={20} /><b>Questionnaire</b><span>Answer the questions; Claude drafts the proposal, or you fill it in yourself. Coming in the next build step.</span>
-          </div>
+          <button type="button" className="pr-choice glass" disabled={!!busy} onClick={async () => { setBusy("q"); try { const id = await startQ(who); navigate(`/proposals/${id}`); } catch (e) { show(errText(e)); setBusy(null); } }}>
+            <Icon name="note" size={20} /><b>Questionnaire {busy === "q" && <span className="pr-wait">· opening…</span>}</b><span>Answer the questions; Claude drafts the proposal, or you fill it in yourself.</span>
+          </button>
           <button type="button" className="pr-choice glass" onClick={() => void start("blank")} disabled={!!busy}>
             <Icon name="document" size={20} /><b>Blank {busy === "blank" && <span className="pr-wait">· opening…</span>}</b><span>An empty proposal with the standard sections: Cover, Overview, Scope and the rest.</span>
           </button>
@@ -200,5 +202,7 @@ export function ProposalBuilder({ proposalId }: { proposalId: string }) {
   const p = useQuery(api.proposals.get, { proposalId });
   if (p === undefined) return <><TopBar><a {...linkProps("/proposals")}>Proposals</a></TopBar><div className="wp-page"><Card label="Loading"><SkeletonRows n={4} /></Card></div></>;
   if (p === null) return <><TopBar><a {...linkProps("/proposals")}>Proposals</a></TopBar><div className="wp-page"><EmptyState icon="quote" title="This proposal isn't here." body="It may have been a draft that was deleted." actions={<ButtonLink to="/proposals">All proposals</ButtonLink>} /></div></>;
+  if (p.filling) return <QuestionnaireRunner key={p._id} proposalId={p._id} />;
+  if (p.status === "waiting") return <ProposalWaiting p={p} />;
   return <Builder key={p.buildId} mode={{ kind: "build", buildId: p.buildId, proposal: p }} />;
 }

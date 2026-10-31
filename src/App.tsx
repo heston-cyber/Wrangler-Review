@@ -58,6 +58,8 @@ const NewProposal = lazy(() => import("./modules/proposals/Proposals").then((m) 
 const ProposalTemplates = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalTemplates })));
 const ProposalBuilder = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalBuilder })));
 const ClientProposal = lazy(() => import("./modules/proposals/ClientProposal"));
+const QuestionnaireEditor = lazy(() => import("./modules/proposals/Questionnaire").then((m) => ({ default: m.QuestionnaireEditor })));
+const QuestionnaireRunner = lazy(() => import("./modules/proposals/Questionnaire").then((m) => ({ default: m.QuestionnaireRunner })));
 // Wrangler Sign (S1): its own chunk, so pdf.js only loads on those pages.
 const SignHome = lazy(() => import("./modules/docs/pages/SignHome"));
 const SignDocs = lazy(() => import("./modules/docs/pages/SignDocs"));
@@ -196,6 +198,9 @@ function SignedIn() {
   else if (path.startsWith("/sign")) page = <Suspense fallback={<Loading />}><SignHome /></Suspense>;
   else if (/^\/proposals\/?$/.test(path)) page = <Suspense fallback={<Loading />}><ProposalsPage /></Suspense>;
   else if (/^\/proposals\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><NewProposal key={search} clientId={params.get("client")} dealId={params.get("deal")} /></Suspense>;
+  else if (/^\/proposals\/questionnaire\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuestionnaireEditor /></Suspense>;
+  else if (/^\/proposals\/questionnaire\/preview\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuestionnaireRunner key="preview" preview /></Suspense>;
+  else if (/^\/proposals\/[^/]+\/questions\/?$/.test(path)) { const id = path.split("/")[2]; page = <Suspense fallback={<Loading />}><QuestionnaireRunner key={id} proposalId={id} /></Suspense>; }
   else if (/^\/proposals\/templates\/?$/.test(path)) page = <Suspense fallback={<Loading />}><ProposalTemplates /></Suspense>;
   else if (/^\/proposals\/templates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3] as Id<"wsTemplates">; page = <Suspense fallback={<Loading />}><Builder key={id} mode={{ kind: "template", templateId: id, proposal: true }} /></Suspense>; }
   else if (/^\/proposals\/[^/]+\/?$/.test(path)) { const id = path.split("/")[2]; page = <Suspense fallback={<Loading />}><ProposalBuilder key={id} proposalId={id} /></Suspense>; }

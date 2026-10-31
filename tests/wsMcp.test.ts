@@ -213,7 +213,7 @@ describe("T-S4.3 reading, and keys", () => {
   test("status and the signed copy read back; missing, wrong, revoked and Review keys are refused", async () => {
     const x = await setup();
     const list = { jsonrpc: "2.0", id: 1, method: "tools/list" };
-    expect((await x.rpc(list)).j.result.tools.map((t: any) => t.name)).toEqual(["list_documents", "get_document", "create_document", "update_document", "preview_document", "approve_document", "send_document", "send_reminder", "void_document", "get_audit_trail", "get_signed_pdf", "list_templates", "get_template", "list_drafts", "create_draft", "get_draft", "update_draft", "import_pdf", "draft_to_signing", "save_draft_as_template", "verify_pdf"]);
+    expect((await x.rpc(list)).j.result.tools.map((t: any) => t.name)).toEqual(["list_documents", "get_document", "create_document", "update_document", "preview_document", "approve_document", "send_document", "send_reminder", "void_document", "get_audit_trail", "get_signed_pdf", "list_templates", "get_template", "list_drafts", "create_draft", "get_draft", "update_draft", "import_pdf", "draft_to_signing", "save_draft_as_template", "list_proposals", "get_proposal", "write_proposal_draft", "verify_pdf"]); // Phase 3b: the proposal tools (D89)
     expect((await x.rpc(list, null)).status).toBe(401);
     expect((await x.rpc(list, "ws_wrongwrongwrongwrongwrong")).status).toBe(401);
     // A Wrangler Review key doesn't open this one, and this key doesn't open Review's.

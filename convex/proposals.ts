@@ -25,6 +25,9 @@ import { fillAgreement, moveCardFor, newAgreementDraft } from "./crm";
 import { defaultStyle, insertBuild } from "./builder";
 import { nodesOf, pageOf, totals, type BuildDoc, type ExtraSigner, type Fields, type ItemRow, type Page, type Style } from "./lib/wsBuilder";
 import { proposalProblems, proposalStarterPage, sectionCount } from "./lib/wsProposal";
+import { WRANGLER_QUESTIONNAIRE, answerList, bound, cleanQuestionnaire, linesTotal, outlineFromAnswers, type Answers, type ClientAnswer, type FileAnswer, type PLine, type Questionnaire } from "./lib/questionnaire";
+import { EMPTY_KIT, MAX_FILE_BYTES, MAX_FILES, linkLabel, type Kit } from "./brandKit";
+import { pageToMarkdown } from "./lib/wsPageMd";
 
 const TOKEN = /^[A-Za-z0-9_-]{16,64}$/;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
@@ -68,7 +71,7 @@ export const list = query({
       const who = whoOf(p, build);
       out.push({
         _id: p._id, number: p.number, title: build?.title ?? "Proposal", status: p.status, company: who.company, contact: who.name, lead: !p.clientId && !!p.dealId,
-        totalCents: money(p, build).totalCents, sentAt: p.sentAt ?? null, viewedAt: p.viewedAt ?? null, response: p.response ? { kind: p.response.kind, name: p.response.name, at: p.response.at } : null,
+        filling: !!p.filling, totalCents: p.filling ? linesTotal((p.answers as Answers | undefined)?.__lines, undefined).total : money(p, build).totalCents, sentAt: p.sentAt ?? null, viewedAt: p.viewedAt ?? null, response: p.response ? { kind: p.response.kind, name: p.response.name, at: p.response.at } : null,
         createdAt: p.createdAt, updatedAt: Math.max(p.updatedAt, build?.updatedAt ?? 0),
       });
     }
@@ -94,6 +97,7 @@ export const get = query({
       response: p.response ? { kind: p.response.kind, name: p.response.name, at: p.response.at, reason: p.response.reason ?? null } : null, asked: p.asked ?? {}, voidedAt: p.voidedAt ?? null,
       deal: deal ? { _id: deal._id, stage: deal.stage, title: deal.title } : null, client: client ? { _id: client._id, name: client.name } : null,
       contract: contract ? { _id: contract._id, title: contract.title } : null, history: p.history,
+      source: p.source ?? null, filling: !!p.filling, answers: (p.answers ?? null) as Answers | null, qStep: p.qStep ?? 0, deck: p.deck ?? null, title: build?.title ?? "Proposal",
     };
   },
 });
@@ -123,11 +127,16 @@ async function nextNumber(ctx: MutationCtx, b: Doc<"businesses">) {
   return { seq, number: `${invoicePrefix(b.name)}-P-${String(seq).padStart(4, "0")}` };
 }
 
-/** New proposal: from a proposal template, or blank (the standard sections). The questionnaire comes in Step 4. */
+/** New proposal: from a proposal template, or blank (the standard sections). */
 export const create = mutation({
   args: { templateId: v.optional(v.id("wsTemplates")), clientId: v.optional(v.id("clients")), dealId: v.optional(v.id("deals")) },
   handler: async (ctx, a) => {
     const { me, b } = await ownerBiz(ctx);
+    return makeProposal(ctx, me, b, a);
+  },
+});
+async function makeProposal(ctx: MutationCtx, me: { name?: string | null; email: string }, b: Doc<"businesses">, a: { templateId?: Id<"wsTemplates">; clientId?: Id<"clients">; dealId?: Id<"deals">; questionnaire?: boolean }) {
+  {
     const t = a.templateId ? await ctx.db.get(a.templateId) : null;
     if (a.templateId && (!t || t.kind !== "proposal")) throw new ConvexError("That proposal template isn't here.");
     const client = await clientFields(ctx, a.clientId, a.dealId);
@@ -143,12 +152,16 @@ export const create = mutation({
     await ctx.db.patch(buildId, { kind: "proposal" });
     const { seq, number } = await nextNumber(ctx, b);
     const now = Date.now();
+    const answers: Answers | undefined = a.questionnaire ? { client: client.email || client.company ? {
+      mode: "existing", ...(clientId ? { clientId } : {}), ...(a.dealId ? { dealId: a.dealId } : {}), company: client.company ?? "", name: client.name ?? "", email: client.email ?? "",
+    } satisfies ClientAnswer : undefined, ...(deal?.title ? { title: deal.title } : {}) } : undefined;
     return ctx.db.insert("proposals", {
-      buildId, number, seq, status: "draft", ...(t ? { templateId: t._id } : {}), ...(clientId ? { clientId } : {}), ...(a.dealId ? { dealId: a.dealId } : {}),
-      history: [{ kind: "created", at: now, by: by(me), ...(t ? { detail: `from the template "${t.name}"` } : {}) }], createdBy: by(me), createdAt: now, updatedAt: now,
+      buildId, number, seq, status: "draft", source: a.questionnaire ? "questionnaire" : t ? "template" : "blank", ...(t ? { templateId: t._id } : {}), ...(clientId ? { clientId } : {}), ...(a.dealId ? { dealId: a.dealId } : {}),
+      ...(a.questionnaire ? { filling: true, answers: JSON.parse(JSON.stringify(answers ?? {})), qStep: 0 } : {}),
+      history: [{ kind: "created", at: now, by: by(me), ...(t ? { detail: `from the template "${t.name}"` } : a.questionnaire ? { detail: "from the questionnaire" } : {}) }], createdBy: by(me), createdAt: now, updatedAt: now,
     });
-  },
-});
+  }
+}
 
 /** A copy of a sent, declined or withdrawn proposal as a new draft (new number) to change and send again. */
 export const copy = mutation({
@@ -448,3 +461,306 @@ export async function proposalNeeds(ctx: QueryCtx) {
   }
   return out;
 }
+
+// ---------- the questionnaire (D70, D82, D90): its editor, answering it, and finishing ----------
+
+const questionnaireOf = (b: Doc<"businesses"> | null): Questionnaire => (b?.questionnaire as Questionnaire | undefined) ?? WRANGLER_QUESTIONNAIRE;
+
+export const questionnaire = query({
+  args: {},
+  handler: async (ctx) => {
+    const { b } = await ownerBiz(ctx);
+    return { questionnaire: questionnaireOf(b), custom: !!b.questionnaire, wrangler: WRANGLER_QUESTIONNAIRE };
+  },
+});
+export const saveQuestionnaire = mutation({
+  args: { questionnaire: v.any() },
+  handler: async (ctx, a) => {
+    const { b } = await ownerBiz(ctx);
+    if (JSON.stringify(a.questionnaire ?? null).length > 60_000) throw new ConvexError("That questionnaire is too long.");
+    let q: Questionnaire;
+    try { q = cleanQuestionnaire(a.questionnaire); } catch (e) { throw new ConvexError((e as Error).message); }
+    await ctx.db.patch(b._id, { questionnaire: q });
+    return null;
+  },
+});
+export const resetQuestionnaire = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { b } = await ownerBiz(ctx);
+    await ctx.db.patch(b._id, { questionnaire: undefined });
+    return null;
+  },
+});
+
+/** New proposal › Questionnaire: the proposal (and its number) is made now, so the answers save as you go. */
+export const startQuestionnaire = mutation({
+  args: { clientId: v.optional(v.id("clients")), dealId: v.optional(v.id("deals")) },
+  handler: async (ctx, a) => {
+    const { me, b } = await ownerBiz(ctx);
+    return makeProposal(ctx, me, b, { ...a, questionnaire: true });
+  },
+});
+
+const MAX_ANSWERS = 100_000;
+const cleanLines = (x: unknown): PLine[] => (Array.isArray(x) ? x : []).slice(0, 40).map((l) => ({
+  id: String(l?.id ?? newIdLite()).slice(0, 40), description: String(l?.description ?? "").trim().slice(0, 300), qty: Math.min(10_000, Math.max(0, Number(l?.qty) || 0)),
+  unitCents: Math.max(-100_000_000, Math.min(100_000_000, Math.round(Number(l?.unitCents) || 0))),
+  ...(typeof l?.suggestedCents === "number" ? { suggestedCents: Math.round(l.suggestedCents) } : {}), ...(l?.note ? { note: String(l.note).slice(0, 200) } : {}), ...(l?.auto ? { auto: String(l.auto).slice(0, 80) } : {}),
+}));
+const newIdLite = () => Math.random().toString(36).slice(2, 10);
+
+/** Answers save as they're typed (and "Save and finish later" keeps the step). Sent proposals don't change. */
+export const saveAnswers = mutation({
+  args: { proposalId: v.id("proposals"), answers: v.any(), step: v.optional(v.number()) },
+  handler: async (ctx, a) => {
+    await ownerBiz(ctx);
+    const p = await ctx.db.get(a.proposalId);
+    if (!p) throw new ConvexError("That proposal isn't here.");
+    if (!OPEN.has(p.status)) throw new ConvexError("This proposal has been sent; its answers can't change.");
+    if (!a.answers || typeof a.answers !== "object" || JSON.stringify(a.answers).length > MAX_ANSWERS) throw new ConvexError("Those answers are too long.");
+    const answers = { ...(a.answers as Answers), __lines: cleanLines((a.answers as Answers).__lines) };
+    await ctx.db.patch(p._id, { answers, ...(a.step !== undefined ? { qStep: Math.max(0, Math.min(20, Math.round(a.step))) } : {}), updatedAt: Date.now() });
+    return null;
+  },
+});
+
+export const answerUploadUrl = mutation({ args: {}, handler: async (ctx) => { await ownerBiz(ctx); return ctx.storage.generateUploadUrl(); } });
+
+/** A file for a questionnaire answer (logo, references): 25 MB a file and 20 files a proposal (D90). A refused file is
+ *  deleted and the reason returned (a throw would roll the delete back). */
+export const addAnswerFile = mutation({
+  args: { proposalId: v.id("proposals"), storageId: v.id("_storage"), name: v.string() },
+  handler: async (ctx, a): Promise<FileAnswer | { error: string }> => {
+    await ownerBiz(ctx);
+    const p = await ctx.db.get(a.proposalId);
+    const meta = await ctx.db.system.get(a.storageId);
+    const refuse = async (error: string) => { await ctx.storage.delete(a.storageId).catch(() => null); return { error }; };
+    if (!p || !OPEN.has(p.status)) return refuse("This proposal can't take files now.");
+    if (!meta) return { error: "The file didn't upload. Try again." };
+    if (meta.size > MAX_FILE_BYTES) return refuse("That file is over 25 MB. Link to it instead (videos especially).");
+    if (filesIn(p.answers as Answers | undefined).length >= MAX_FILES) return refuse(`Up to ${MAX_FILES} files a proposal. Link to the rest instead.`);
+    return { fileId: a.storageId, name: a.name.trim().slice(0, 160) || "File", size: meta.size, type: meta.contentType ?? "" };
+  },
+});
+const filesIn = (a: Answers | undefined): FileAnswer[] => Object.values(a ?? {}).flatMap((x) => (Array.isArray(x) ? x.filter((f) => f && typeof f === "object" && "fileId" in f) as FileAnswer[] : []));
+export const fileUrls = query({
+  args: { proposalId: v.id("proposals") },
+  handler: async (ctx, { proposalId }) => {
+    await ownerBiz(ctx);
+    const p = await ctx.db.get(proposalId);
+    const out: Record<string, string | null> = {};
+    for (const f of filesIn(p?.answers as Answers | undefined)) out[f.fileId] = await ctx.storage.getUrl(f.fileId as Id<"_storage">);
+    return out;
+  },
+});
+
+/** The client the answers name: an existing company or lead, or a new one saved as the owner chose in step 1
+ *  (a new lead card, or a new company with its person). */
+async function resolveClient(ctx: MutationCtx, me: { name?: string | null; email: string }, c: ClientAnswer | undefined, title: string): Promise<{ clientId?: Id<"clients">; dealId?: Id<"deals">; name: string; email: string; company: string }> {
+  if (!c) throw new ConvexError("Answer Client first: who it's for.");
+  const email = (c.email ?? "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email) || email.length > 254) throw new ConvexError("Add the client's email (step 1).");
+  if (!(c.name ?? "").trim()) throw new ConvexError("Add the client's name (step 1).");
+  const out = { name: c.name.trim().slice(0, 120), email, company: (c.company ?? "").trim().slice(0, 120) };
+  if (c.mode === "existing") {
+    const clientId = c.clientId ? ctx.db.normalizeId("clients", c.clientId) : null;
+    const dealId = c.dealId ? ctx.db.normalizeId("deals", c.dealId) : null;
+    if (clientId && !(await ctx.db.get(clientId))) throw new ConvexError("That company isn't here.");
+    if (dealId && !(await ctx.db.get(dealId))) throw new ConvexError("That lead isn't here.");
+    return { ...out, ...(clientId ? { clientId } : {}), ...(dealId ? { dealId } : {}) };
+  }
+  const now = Date.now();
+  if (c.saveAs === "company") {
+    if (!out.company) throw new ConvexError("Add the company name (step 1).");
+    const clientId = await ctx.db.insert("clients", { name: out.company, createdAt: now });
+    await ctx.db.insert("clientPeople", { clientId, email, name: out.name, role: "signer", createdAt: now });
+    return { ...out, clientId };
+  }
+  const dealId = await ctx.db.insert("deals", {
+    title: (title || out.company || out.name).slice(0, 160), contactEmail: email, stage: "lead", source: "hand",
+    lead: { name: out.name, email, ...(out.company ? { company: out.company } : {}), ...(c.phone?.trim() ? { phone: c.phone.trim().slice(0, 40) } : {}), fields: c.website?.trim() ? [{ label: "Website", value: c.website.trim().slice(0, 200) }] : [], at: now },
+    history: [{ kind: "created", at: now, by: by(me), detail: "from the proposal questionnaire" }], createdAt: now, updatedAt: now,
+  });
+  return { ...out, dealId };
+}
+
+/** The brand answers go into the company's brand kit (D71), added to what's there; a lead keeps them on the proposal. */
+async function fillKit(ctx: MutationCtx, clientId: Id<"clients">, qn: Questionnaire, a: Answers) {
+  const c = await ctx.db.get(clientId);
+  if (!c) return;
+  const kit: Kit = { ...EMPTY_KIT, ...((c.brandKit as Partial<Kit> | undefined) ?? {}) };
+  const colors = (bound(qn, a, "brand.colors") as string[] | undefined) ?? [];
+  for (const hex of colors) if (/^#[0-9a-f]{6}$/i.test(hex) && !kit.colors.some((x) => x.hex.toLowerCase() === hex.toLowerCase())) kit.colors.push({ hex: hex.toUpperCase() });
+  const font = (b: string) => { const f = bound(qn, a, b); return typeof f === "string" && f.trim() && f !== "Not sure" ? f.trim().slice(0, 80) : undefined; };
+  kit.fonts = { ...kit.fonts, ...(font("brand.heading") ? { heading: font("brand.heading") } : {}), ...(font("brand.body") ? { body: font("brand.body") } : {}) };
+  const links = (bound(qn, a, "brand.links") as string[] | string | undefined) ?? [];
+  for (const u of (Array.isArray(links) ? links : [links]).map((x) => String(x).trim()).filter((x) => /^https?:\/\//i.test(x))) if (!kit.links.some((l) => l.url === u)) kit.links.push({ url: u.slice(0, 500), label: linkLabel(u) });
+  for (const w of ((bound(qn, a, "brand.tone") as string[] | undefined) ?? [])) if (w && !kit.tone.includes(w)) kit.tone.push(String(w).slice(0, 40));
+  const logo = ((bound(qn, a, "brand.logo") as FileAnswer[] | undefined) ?? []);
+  const now = Date.now();
+  logo.forEach((f, i) => {
+    if (i === 0 && !kit.logoFileId && /image\//.test(f.type)) kit.logoFileId = f.fileId as Id<"_storage">;
+    else if (!kit.files.some((x) => x.fileId === f.fileId) && kit.files.length < MAX_FILES) kit.files.push({ fileId: f.fileId as Id<"_storage">, name: f.name, size: f.size, type: f.type, addedAt: now, source: "questionnaire" });
+  });
+  kit.colors = kit.colors.slice(0, 24); kit.links = kit.links.slice(0, 40); kit.tone = kit.tone.slice(0, 30);
+  await ctx.db.patch(clientId, { brandKit: kit });
+}
+
+/** Review's choice: "Draft with Claude" (waits for Claude through the connector) or "Fill in myself" (the answers in a
+ *  plain outline). Either way the builder gets the outline, the client, title and project; nothing is sent. */
+export const finish = mutation({
+  args: { proposalId: v.id("proposals"), how: v.union(v.literal("claude"), v.literal("self")) },
+  handler: async (ctx, a) => {
+    const { me, b } = await ownerBiz(ctx);
+    const p = await ctx.db.get(a.proposalId);
+    const build = p ? await ctx.db.get(p.buildId) : null;
+    if (!p || !build) throw new ConvexError("That proposal isn't here.");
+    if (!OPEN.has(p.status)) throw new ConvexError("This proposal has been sent.");
+    const qn = questionnaireOf(b);
+    const ans = (p.answers ?? {}) as Answers;
+    for (const s of qn.steps) for (const qq of s.questions) {
+      const v0 = ans[qq.id];
+      if (qq.required && (v0 === undefined || v0 === null || v0 === "" || (Array.isArray(v0) && !v0.length))) throw new ConvexError(`Answer "${qq.label}" (${s.title}).`);
+    }
+    const title = String(bound(qn, ans, "project.title") ?? "").trim().slice(0, 120);
+    const who = await resolveClient(ctx, me, bound(qn, ans, "client") as ClientAnswer | undefined, title);
+    const clientId = who.clientId ?? p.clientId;
+    if (clientId) await fillKit(ctx, clientId, qn, ans);
+    const f = build.fields as Fields;
+    const fields: Fields = { ...f, project: title || f.project, client: { ...f.client, name: who.name, email: who.email, company: who.company } };
+    const fresh = !!p.filling || p.status === "waiting"; // never overwrite a page Claude or the owner already wrote
+    await ctx.db.patch(build._id, { title: title || build.title, fields, ...(fresh ? { blocks: outlineFromAnswers(qn, ans) } : {}), updatedAt: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(p._id, {
+      filling: false, status: a.how === "claude" ? "waiting" : p.status === "waiting" ? "draft" : p.status, ...(clientId ? { clientId } : {}), ...(who.dealId ? { dealId: who.dealId } : {}), updatedAt: now,
+      history: [...p.history, { kind: a.how === "claude" ? "asked_claude" : "filled_in", at: now, by: by(me) }].slice(-60),
+    });
+    return null;
+  },
+});
+
+/** "Fill in myself instead" on the waiting page: the outline is already in the builder. */
+export const fillInstead = mutation({
+  args: { proposalId: v.id("proposals") },
+  handler: async (ctx, { proposalId }) => {
+    await ownerBiz(ctx);
+    const p = await ctx.db.get(proposalId);
+    if (!p) throw new ConvexError("That proposal isn't here.");
+    if (p.status === "waiting") await ctx.db.patch(proposalId, { status: "draft", updatedAt: Date.now() });
+    return null;
+  },
+});
+export const dismissDrafted = mutation({
+  args: { proposalId: v.id("proposals") },
+  handler: async (ctx, { proposalId }) => {
+    await ownerBiz(ctx);
+    const p = await ctx.db.get(proposalId);
+    if (p?.drafted) await ctx.db.patch(proposalId, { drafted: undefined });
+    return null;
+  },
+});
+
+/** "Make a pitch deck" (D72): which brand kit and the owner's note, kept for Claude to read through the connector. */
+export const setDeck = mutation({
+  args: { proposalId: v.id("proposals"), kit: v.union(v.literal("business"), v.literal("client")), note: v.optional(v.string()), asked: v.optional(v.boolean()) },
+  handler: async (ctx, a) => {
+    await ownerBiz(ctx);
+    const p = await ctx.db.get(a.proposalId);
+    if (!p) throw new ConvexError("That proposal isn't here.");
+    const note = a.note !== undefined ? a.note.trim().slice(0, 1000) : p.deck?.note;
+    await ctx.db.patch(p._id, { deck: { kit: a.kit, ...(note ? { note } : {}), ...(a.asked ? { askedAt: Date.now() } : p.deck?.askedAt ? { askedAt: p.deck.askedAt } : {}) } });
+    return null;
+  },
+});
+
+// ---------- the Sign connector's proposal tools (D89): Claude reads the answers, writes the draft, makes the deck ----------
+
+export const connectorFind = internalQuery({
+  args: { ref: v.string() },
+  handler: async (ctx, { ref }): Promise<{ ok: true; proposalId: Id<"proposals"> } | { ok: false; error: string }> => {
+    const r = ref.trim();
+    if (!r) return { ok: false, error: "Pass the proposal: its number (e.g. WRNGLR-P-0007), its proposal_id, or words from its title." };
+    const id = ctx.db.normalizeId("proposals", r);
+    if (id && (await ctx.db.get(id))) return { ok: true, proposalId: id };
+    const rows = await ctx.db.query("proposals").withIndex("by_updated").order("desc").take(300);
+    const byNum = rows.find((p) => p.number.toLowerCase() === r.toLowerCase());
+    if (byNum) return { ok: true, proposalId: byNum._id };
+    const words = r.toLowerCase().split(/\s+/);
+    const hits = [];
+    for (const p of rows) { const b = await ctx.db.get(p.buildId); if (b && words.every((w) => b.title.toLowerCase().includes(w))) hits.push(p); }
+    if (hits.length === 1) return { ok: true, proposalId: hits[0]._id };
+    return { ok: false, error: hits.length ? `${hits.length} proposals match "${r}"; pass its number.` : `No proposal matches "${r}". list_proposals shows them.` };
+  },
+});
+
+export const connectorList = internalQuery({
+  args: { status: v.optional(v.string()) },
+  handler: async (ctx, { status }) => {
+    const out = [];
+    for (const p of await ctx.db.query("proposals").withIndex("by_updated").order("desc").take(100)) {
+      if (status && status !== "all" && p.status !== status) continue;
+      const b = await ctx.db.get(p.buildId);
+      const c = p.contact ?? { name: (b?.fields as Fields)?.client?.name ?? "", company: (b?.fields as Fields)?.client?.company ?? "" };
+      out.push({ proposal: p.number, proposal_id: p._id, title: b?.title ?? "", status: p.filling ? "questionnaire" : p.status, client: [c.company, c.name].filter(Boolean).join(" · ") || null, link: `${SITE()}/proposals/${p._id}`, updated: new Date(p.updatedAt).toISOString() });
+    }
+    return out;
+  },
+});
+
+async function kitOut(ctx: QueryCtx, row: { name: string; brandKit?: unknown; logoFileId?: Id<"_storage">; accent?: string; background?: string } | null) {
+  if (!row) return null;
+  const k: Kit = { ...EMPTY_KIT, ...((row.brandKit as Partial<Kit> | undefined) ?? {}) };
+  const url = async (id?: Id<"_storage">) => (id ? await ctx.storage.getUrl(id) : null);
+  return {
+    name: row.name, logo_url: (await url(k.logoFileId)) ?? (await url(row.logoFileId)), colors: [...[row.accent, row.background].filter(Boolean).map((hex) => ({ hex: hex! })), ...k.colors],
+    fonts: k.fonts, links: k.links, tone_words: k.tone, files: await Promise.all(k.files.map(async (f) => ({ name: f.name, type: f.type, url: await url(f.fileId) }))),
+  };
+}
+
+/** Everything Claude needs for the draft and the deck. */
+export const connectorGet = internalQuery({
+  args: { proposalId: v.id("proposals") },
+  handler: async (ctx, { proposalId }) => {
+    const p = await ctx.db.get(proposalId);
+    const build = p ? await ctx.db.get(p.buildId) : null;
+    if (!p || !build) return null;
+    const biz = p.businessId ? await ctx.db.get(p.businessId) : null;
+    const qn = questionnaireOf(biz);
+    const ans = (p.answers ?? {}) as Answers;
+    const client = p.clientId ? await ctx.db.get(p.clientId) : null;
+    const d = docOf(build);
+    const t = totals(d.page);
+    const brandAnswers = { colors: bound(qn, ans, "brand.colors") ?? [], fonts: { heading: bound(qn, ans, "brand.heading") ?? null, body: bound(qn, ans, "brand.body") ?? null }, links: bound(qn, ans, "brand.links") ?? [], tone_words: bound(qn, ans, "brand.tone") ?? [] };
+    const files = [];
+    for (const f of filesIn(ans)) files.push({ name: f.name, type: f.type, url: await ctx.storage.getUrl(f.fileId as Id<"_storage">) });
+    return {
+      number: p.number, status: p.status, filling: !!p.filling, title: build.title, link: `${SITE()}/proposals/${p._id}`,
+      client: { name: d.fields.client.name, email: d.fields.client.email, company: d.fields.client.company }, project: d.fields.project,
+      business: { name: d.fields.business.name, contact: d.fields.business.contact },
+      answers: answerList(qn, ans), lines: (ans.__lines ?? []).map((l) => ({ description: l.description, qty: l.qty, rate: l.unitCents / 100, ...(l.suggestedCents !== undefined && l.suggestedCents !== l.unitCents ? { suggested_rate: l.suggestedCents / 100, overridden: true } : {}) })),
+      investment: { total: t.total, deposit_percent: t.depositPct, deposit: t.deposit }, markdown: pageToMarkdown(d.page),
+      deck: { kit: p.deck?.kit ?? (client ? "client" : "business"), note: p.deck?.note ?? null },
+      kits: { business: await kitOut(ctx, biz), client: client ? await kitOut(ctx, client) : null, from_answers: { ...brandAnswers, files } },
+    };
+  },
+});
+
+/** write_proposal_draft: Claude's page replaces the outline; the owner sees "Drafted by Claude: review before sending". */
+export const connectorWrite = internalMutation({
+  args: { proposalId: v.id("proposals"), page: v.any(), title: v.optional(v.string()) },
+  handler: async (ctx, a) => {
+    const p = await ctx.db.get(a.proposalId);
+    const build = p ? await ctx.db.get(p.buildId) : null;
+    if (!p || !build) throw new ConvexError("That proposal isn't here.");
+    if (!OPEN.has(p.status)) throw new ConvexError(`Proposal ${p.number} has been sent, so it can't change.`);
+    if (p.filling) throw new ConvexError(`Heston hasn't finished the questionnaire for ${p.number} yet.`);
+    const page = pageOf(a.page);
+    if (nodesOf(page, "signatures").length) throw new ConvexError("Proposals aren't signed: leave out the signature block.");
+    if (JSON.stringify(page).length > 400_000) throw new ConvexError("That's too much content for one proposal.");
+    const now = Date.now();
+    await ctx.db.patch(build._id, { blocks: page, ...(a.title?.trim() ? { title: a.title.trim().slice(0, 120) } : {}), updatedAt: now });
+    await ctx.db.patch(p._id, { status: "ready", drafted: "claude", updatedAt: now, history: [...p.history, { kind: "drafted", at: now, by: "Claude" }].slice(-60) });
+    return null;
+  },
+});

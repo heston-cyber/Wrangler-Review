@@ -719,6 +719,7 @@ export default defineSchema({
     brandKit: v.optional(v.any()),           // Phase 3b (D71): Settings › Brand kit (convex/brandKit.ts)
     quoteSeq: v.optional(v.number()),        // Phase 3b: the last quote number used (D74)
     proposalSeq: v.optional(v.number()),     // Phase 3b: the last proposal number used (D85)
+    questionnaire: v.optional(v.any()),      // Phase 3b (D70): the business's own proposal questionnaire (lib/questionnaire.ts)
     // Phase 2b (D64): when Stripe's last retry of a subscription payment fails: keep it past due (default) or cancel it.
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))),
     // Phase 2 Part B step 4 (D51): automatic invoice reminders, off until the owner turns them on (that's their OK).
@@ -842,7 +843,12 @@ export default defineSchema({
     lineCount: v.optional(v.number()),
     pdfId: v.optional(v.id("_storage")),         // the PDF as sent
     message: v.optional(v.string()),
-    drafted: v.optional(v.literal("claude")),    // Step 4: Claude wrote the draft (the review banner)
+    drafted: v.optional(v.literal("claude")),    // Claude wrote the draft through the connector (the review banner)
+    source: v.optional(v.union(v.literal("template"), v.literal("blank"), v.literal("questionnaire"), v.literal("copy"))),
+    filling: v.optional(v.boolean()),            // the questionnaire is still being answered
+    answers: v.optional(v.any()),                // the questionnaire's answers, by question id (and __lines, the priced lines)
+    qStep: v.optional(v.number()),               // the step they were on ("Save and finish later")
+    deck: v.optional(v.object({ kit: v.union(v.literal("business"), v.literal("client")), note: v.optional(v.string()), askedAt: v.optional(v.number()) })), // D72
     token: v.optional(v.string()),
     sentAt: v.optional(v.number()),
     viewedAt: v.optional(v.number()),
