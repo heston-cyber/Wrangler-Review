@@ -103,7 +103,7 @@ export function argsFor(ids: Ids): Record<string, Record<string, unknown>> {
     "proposals.questionnaire": {}, "proposals.saveQuestionnaire": { questionnaire: {} }, "proposals.resetQuestionnaire": {}, "proposals.startQuestionnaire": {},
     "proposals.saveAnswers": { proposalId: ids.proposalId, answers: {} }, "proposals.answerUploadUrl": {}, "proposals.addAnswerFile": { proposalId: ids.proposalId, storageId: ids.storageId, name: "f" },
     "proposals.fileUrls": { proposalId: ids.proposalId }, "proposals.finish": { proposalId: ids.proposalId, how: "self" }, "proposals.fillInstead": { proposalId: ids.proposalId },
-    "proposals.dismissDrafted": { proposalId: ids.proposalId }, "proposals.setDeck": { proposalId: ids.proposalId, kit: "business" },
+    "proposals.dismissDrafted": { proposalId: ids.proposalId }, "proposals.forCompany": { clientId: ids.clientRecId }, "proposals.setDeck": { proposalId: ids.proposalId, kit: "business" },
     "brandKit.get": {}, "brandKit.save": { colors: [], fonts: {}, links: [], tone: [] }, "brandKit.uploadUrl": {}, "brandKit.addFile": { storageId: ids.storageId, name: "x.pdf" }, "brandKit.removeFile": { fileId: ids.storageId },
     "crm.rates": {}, "crm.saveRates": { rates: {} }, "crm.board": {}, "crm.addDeal": { title: "X" }, "crm.moveDeal": { dealId: ids.dealId, stage: "quoted" }, "crm.closeDeal": { dealId: ids.dealId },
     "crm.deal": { dealId: "nope" }, "crm.companies": {}, "crm.company": { clientId: "nope" }, "crm.contact": { personId: "nope" }, "crm.followUps": {},

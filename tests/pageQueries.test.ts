@@ -101,6 +101,7 @@ const PAGES: Record<string, { pages: Page[]; args: (ids: Ids, share: Share | nul
   "proposals.templates": { pages: ["owner"], args: () => "skip" }, // Proposals › Templates, New proposal
   "proposals.questionnaire": { pages: ["owner"], args: () => "skip" }, // the questionnaire, its editor, the waiting page
   "proposals.fileUrls": { pages: ["owner"], args: () => "skip" }, // the questionnaire's uploaded files
+  "proposals.forCompany": { pages: ["owner"], args: () => "skip" }, // the company page's Proposals and quotes
   "proposals.page": { pages: ["share"], args: () => ({ token: "x".repeat(24) }) }, // /p/<token>, no account (D73)
   "brandKit.get": { pages: ["owner"], args: () => "skip" }, // Settings › Brand kit, a company's Brand kit tab (Phase 3b)
   "subscriptions.get": { pages: ["owner"], args: () => "skip" }, // a subscription

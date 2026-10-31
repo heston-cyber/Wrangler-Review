@@ -84,6 +84,7 @@ export default function DealPage({ dealId }: { dealId: string }) {
                 <div className="crm-steps">
                   <ButtonLink variant="primary" to={newEstimate}>New estimate</ButtonLink>
                   <ButtonLink to={`/payments/quotes/new?${d.clientId ? `client=${d.clientId}` : `deal=${id}`}`}>Quick quote</ButtonLink>
+                  <ButtonLink to={`/proposals/new?${d.clientId ? `client=${d.clientId}&deal=${id}` : `deal=${id}`}`}>New proposal</ButtonLink>
                   <Button onClick={() => setAdding(true)}>Add follow-up</Button>
                   <button type="button" className="btn ghost" disabled={busy} onClick={() => void notLead()}>{web && d.stage === "lead" ? "Not a lead" : "Take off the board"}</button>
                   <p className="wp-small">{web && d.stage === "lead" ? "Not a lead archives the card. Spam is filtered before a card is made." : "The card is kept, just off the board."}</p>

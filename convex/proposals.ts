@@ -764,3 +764,21 @@ export const connectorWrite = internalMutation({
     return null;
   },
 });
+
+/** The company page's "Proposals and quotes" card (718:7002): both, newest first. */
+export const forCompany = query({
+  args: { clientId: v.id("clients") },
+  handler: async (ctx, { clientId }) => {
+    await ownerBiz(ctx);
+    if (!(await ctx.db.get(clientId))) return [];
+    const out: Array<{ kind: "proposal" | "quote"; _id: string; title: string; number: string; status: string; totalCents: number; at: number; sentAt: number | null; response: { kind: string; name: string; at: number } | null; validUntil: string | null }> = [];
+    for (const p of await ctx.db.query("proposals").withIndex("by_client", (q) => q.eq("clientId", clientId)).collect()) {
+      const b = await ctx.db.get(p.buildId);
+      out.push({ kind: "proposal", _id: p._id, title: b?.title ?? "Proposal", number: p.number, status: p.status, totalCents: money(p, b).totalCents, at: p.updatedAt, sentAt: p.sentAt ?? null, response: p.response ? { kind: p.response.kind, name: p.response.name, at: p.response.at } : null, validUntil: null });
+    }
+    for (const q of await ctx.db.query("quotes").withIndex("by_client", (x) => x.eq("clientId", clientId)).collect()) {
+      out.push({ kind: "quote", _id: q._id, title: q.title, number: q.number, status: q.status, totalCents: q.totalCents, at: q.updatedAt, sentAt: q.sentAt ?? null, response: q.response ? { kind: q.response.kind, name: q.response.name, at: q.response.at } : null, validUntil: q.validUntil });
+    }
+    return out.sort((a, b) => b.at - a.at).slice(0, 20);
+  },
+});

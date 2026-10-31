@@ -419,6 +419,7 @@ export function ProposalWaiting({ p }: { p: ProposalInfo }) {
   const [toast, show] = useToast();
   const [busy, setBusy] = useState(false);
   const phrase = `Draft proposal ${p.number} in Wrangler Portal`;
+  const askedAt = [...p.history].reverse().find((h) => h.kind === "asked_claude")?.at ?? null;
   const qn = qq?.questionnaire as Questionnaire | undefined;
   const a = (p.answers ?? {}) as Answers;
   const txt = (b: string) => { const x = qn?.steps.flatMap((s) => s.questions).find((y) => y.bind === b); return x ? answerText(x, a[x.id]) : ""; };
@@ -442,6 +443,9 @@ export function ProposalWaiting({ p }: { p: ProposalInfo }) {
           <p className="wp-body">Open your Claude app and say this. Claude reads your answers through the connector and writes the draft here.</p>
           <div className="qz-phrase"><span>“{phrase}”</span><button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(phrase).then(() => show("Copied"), () => show("Couldn't copy"))}>Copy</button></div>
           <p className="wp-small secondary qz-wait"><Spinner /> This page updates when the draft lands. You can leave it.</p>
+          {askedAt && Date.now() - askedAt > 10 * 60_000 && (
+            <div className="wp-notice warn"><Icon name="clock" size={20} /><span className="txt"><b>Still waiting for Claude (since {timeWord(askedAt)})</b><span className="wp-small"> Check the connector is on in your Claude app, then say the line again. Or fill it in yourself.</span></span></div>
+          )}
           <p className="wp-small secondary">Claude needs the Wrangler Sign connector (Settings › Claude connectors).</p>
         </section>
         <section className="qz-card glass" aria-label="Your answers">

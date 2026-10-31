@@ -302,6 +302,23 @@ function FollowUpsCard({ crm, show, onAdd }: { crm: Crm | undefined; show: (m: s
   );
 }
 
+// Phase 3b (718:7002): this company's proposals and quick quotes.
+function PitchesCard({ clientId }: { clientId: Id<"clients"> }) {
+  const list = useQuery(api.proposals.forCompany, { clientId });
+  if (!list) return null;
+  const day = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const word: Record<string, string> = { draft: "Draft", waiting: "Waiting for Claude", ready: "Ready", sent: "Sent", accepted: "Accepted", declined: "Declined", void: "Withdrawn" };
+  const tone = (s: string): "neutral" | "accent" | "success" | "danger" | "warning" => (s === "accepted" ? "success" : s === "declined" ? "danger" : s === "waiting" ? "warning" : s === "sent" || s === "ready" ? "accent" : "neutral");
+  return (
+    <Card label="Proposals and quotes" head={<SectionHead label="Proposals and quotes" count={list.length} action={<ButtonLink size="sm" variant="ghost" to={`/proposals/new?client=${clientId}`} icon="plus">New proposal</ButtonLink>} />}>
+      {list.length === 0 ? <ListRow className="ilead quiet" lead={{ icon: "document" }} title="None yet." />
+        : rows(list, (x) => <ListRow className="ilead" lead={{ icon: x.kind === "proposal" ? "document" : "invoice" }} to={x.kind === "proposal" ? `/proposals/${x._id}` : `/payments/quotes/${x._id}`} title={x.title}
+          meta={[`${x.kind === "proposal" ? "Proposal" : "Quote"} ${x.number}`, x.response ? `${x.response.kind} ${day(x.response.at)}` : x.sentAt ? `sent ${day(x.sentAt)}` : null, x.validUntil && x.status === "sent" ? `valid until ${day(Date.parse(`${x.validUntil}T12:00:00`))}` : null].filter(Boolean).join(" · ")}
+          trailing={money(x.totalCents)} chip={<StatusChip tone={tone(x.status)}>{word[x.status] ?? x.status}</StatusChip>} chevron />, (x) => x._id)}
+    </Card>
+  );
+}
+
 // ---------- the page ----------
 export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"clients">; tab: ClientTab }) {
   const page = useQuery(api.clients.page, { clientId });
@@ -323,6 +340,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
     <>
       <Button onClick={() => setFollowing(true)}>Add follow-up</Button>
       <ButtonLink to={`/payments/quotes/new?client=${clientId}`}>Quick quote</ButtonLink>
+      <ButtonLink to={`/proposals/new?client=${clientId}`}>New proposal</ButtonLink>
       <ButtonLink variant="primary" to={`/clients/estimates/new?client=${clientId}`}>New estimate</ButtonLink>
     </>
   );
@@ -352,6 +370,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
           <div className="wp-homecols cp-overview">
             <div className="col">
               <DealsCard crm={crm} clientId={clientId} />
+              <PitchesCard clientId={clientId} />
               <Card className="cp-projects" label="Projects" head={<SectionHead label="Projects" count={page.projects.length} action={<ButtonLink size="sm" variant="ghost" to="/projects" icon="plus">New project</ButtonLink>} />}><ProjectRows page={page} max={4} /></Card>
               <Card className="cp-shared" label="Shared with them" head={<SectionHead label="Shared with them" count={page.shared.length} action={<Button size="sm" variant="ghost" onClick={() => setSharing(true)} iconEnd="chevron-right">Share a cut</Button>} />}><SharedRows page={page} max={5} /></Card>
               <Card className="cp-docs" label="Documents" head={<SectionHead label="Documents" count={page.documents.length} action={<ButtonLink size="sm" variant="ghost" to="/sign/new" icon="plus">New document</ButtonLink>} />}><DocRows page={page} max={5} /></Card>

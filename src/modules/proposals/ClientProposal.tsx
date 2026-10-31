@@ -64,7 +64,7 @@ export default function ClientProposal({ token }: { token: string }) {
   const [reason, setReason] = useState("");
   useEffect(() => { if (p && !once.current) { once.current = true; void viewed({ token }).catch(() => undefined); } }, [p, token, viewed]);
   if (p === undefined) return <Frame inShell={false} bar={null}><Card label="Loading"><SkeletonRows n={5} /></Card></Frame>;
-  if (p === null) return <Frame inShell={false} bar={null}><EmptyState icon="document" title="This proposal link doesn't work." body="It may have been mistyped. Open the link in the email again, or reply to that email." /></Frame>;
+  if (p === null) return <Frame inShell={false} bar={null}><EmptyState icon="lock" title="This link doesn't work any more." body="It may have been mistyped or replaced by a newer version. Open the link in the email again, or reply to that email to ask for it." /></Frame>;
   const biz = p.business.name || "the business";
   const go = async (action: "accept" | "decline") => {
     setBusy(action); setError(null);
