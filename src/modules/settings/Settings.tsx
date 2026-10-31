@@ -21,6 +21,7 @@ import lightElbow from "../../assets/portal/light-elbow.jpg";
 import { ago } from "../../lib/format";
 import { DropboxSettings } from "./DropboxSettings";
 import { PaymentsSettings } from "./PaymentsSettings";
+import RatesSection from "./RatesSection";
 import { ClientsSettings } from "../clients/Clients";
 import { SharesSettings } from "../review/Share";
 
@@ -100,6 +101,7 @@ export default function Settings({ me }: { me: { name: string | null; email: str
     <SettingsFrame section={key}>
       {key === "business" && <BusinessSection show={show} />}
       {key === "payments" && <PaymentsSettings show={show} />}
+      {key === "rates" && <RatesSection show={show} />}
       {key === "account" && <AccountSection me={me} show={show} />}
       {key === "dropbox" && <DropboxSettings show={show} />}
       {key === "connectors" && <>

@@ -1,5 +1,6 @@
-// The client page (P1 / Owner / Client page): header with Share a cut and Post a note; tabs Overview · Projects ·
-// Shared · Documents · Their Inbox. Their Inbox shows exactly what one of their people sees.
+// The client page (P1 / Owner / Client page): tabs Overview · Projects · Shared · Documents · Their Inbox. Their Inbox
+// shows exactly what one of their people sees. Phase 3 (P3 / Owner / Company, 262:32550) makes it the company page:
+// Add follow-up and New estimate in the header, billed · paid · outstanding, and Deals and Follow-ups on Overview.
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
@@ -12,6 +13,8 @@ import { linkProps, navigate } from "../../lib/router";
 import { ShareDialog } from "../review/Share";
 import { errText } from "../docs/pages/common";
 import { INBOX_ICON, dayWord, firstName, itemDetail, monthDay, type InboxKind } from "../inbox/common";
+import { money } from "../payments/common";
+import { AddFollowUp, FollowUpRow } from "../crm/common";
 
 type Page = NonNullable<ReturnType<typeof useQuery<typeof api.clients.page>>>;
 type Person = Page["people"][number];
@@ -40,7 +43,7 @@ function PersonRow({ p, show }: { p: Person; show: (m: string) => void }) {
     catch (e) { show(errText(e)); } finally { setBusy(false); }
   };
   return (
-    <ListRow lead={{ avatar: p.name ?? p.email, two: true }} title={p.name ?? p.email} meta={<>{ROLE[p.role]} · {accessText(p)}</>}
+    <ListRow lead={{ avatar: p.name ?? p.email, two: true }} title={<a className="cp-person" {...linkProps(`/clients/people/${p._id}`)}>{p.name ?? p.email}</a>} meta={<>{ROLE[p.role]} · {accessText(p)}</>}
       chip={p.access.state === "active" ? <span className="pc-only"><StatusChip tone="success">Active</StatusChip></span> : undefined}
       action={p.access.state === "active" ? undefined : (
         <Button size="sm" loading={busy} onClick={() => void go()}>
@@ -264,11 +267,47 @@ function SubFailRow({ clientId, name, show }: { clientId: Id<"clients">; name: s
   );
 }
 
+// ---------- Phase 3: money, deals, follow-ups ----------
+type Crm = NonNullable<ReturnType<typeof useQuery<typeof api.crm.company>>>;
+function MoneyTiles({ crm }: { crm: Crm | undefined }) {
+  if (!crm) return null;
+  const open = crm.outstandingCents > 0;
+  return (
+    <div className="pov-stats crm-money">
+      <div className="pov-stat"><span className="lbl">Billed</span><b>{money(crm.billedCents)}</b><span className="sub">all invoices sent</span></div>
+      <div className="pov-stat"><span className="lbl">Paid</span><b>{money(crm.paidCents)}</b><span className="sub">received through Stripe</span></div>
+      <div className="pov-stat"><span className="lbl">Outstanding</span><b>{money(crm.outstandingCents)}</b><span className="sub">{open ? "on open invoices" : "nothing due"}</span></div>
+    </div>
+  );
+}
+const TONE: Record<string, "accent" | "neutral" | "success" | "warning"> = { lead: "neutral", quoted: "neutral", contract_sent: "warning", signed: "accent", in_production: "accent", delivered: "success", paid: "success" };
+function DealsCard({ crm, clientId }: { crm: Crm | undefined; clientId: Id<"clients"> }) {
+  if (!crm) return null;
+  return (
+    <Card label="Deals" head={<SectionHead label="Deals" count={crm.deals.length} action={<ButtonLink size="sm" variant="ghost" icon="plus" to={`/clients/estimates/new?client=${clientId}`}>New estimate</ButtonLink>} />}>
+      {crm.deals.length === 0 ? <ListRow className="ilead quiet" lead={{ icon: "activity" }} title="No deals on the pipeline." />
+        : rows(crm.deals, (d) => <ListRow className="ilead" lead={{ icon: "activity" }} to={`/clients/deals/${d._id}`} title={d.title} meta={d.valueCents ? money(d.valueCents) : "No value yet"}
+          chip={<StatusChip tone={TONE[d.stage]}>{d.stageName}</StatusChip>} chevron />, (d) => d._id)}
+    </Card>
+  );
+}
+function FollowUpsCard({ crm, show, onAdd }: { crm: Crm | undefined; show: (m: string) => void; onAdd: () => void }) {
+  if (!crm) return null;
+  return (
+    <Card label="Follow-ups" head={<SectionHead label="Follow-ups" count={crm.followUps.length} action={<Button size="sm" variant="ghost" icon="plus" onClick={onAdd}>Add</Button>} />}>
+      {crm.followUps.length === 0 ? <ListRow className="ilead quiet" lead={{ icon: "bell" }} title="None set." />
+        : rows(crm.followUps, (f) => <FollowUpRow f={f} show={show} />, (f) => f._id)}
+    </Card>
+  );
+}
+
 // ---------- the page ----------
 export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"clients">; tab: ClientTab }) {
   const page = useQuery(api.clients.page, { clientId });
   const events = useQuery(api.inbox.forClient, { clientId });
   const biz = useQuery(api.business.settings, {});
+  const crm = useQuery(api.crm.company, { clientId }) ?? undefined;
+  const [following, setFollowing] = useState(false);
   const [toast, show] = useToast();
   const [sharing, setSharing] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -281,13 +320,13 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
   const name = page.client.name;
   const actions = (
     <>
-      <Button onClick={() => setSharing(true)}>Share a cut</Button>
-      <ButtonLink variant="primary" to={`/sent/new?client=${clientId}`}>Post a note</ButtonLink>
+      <Button onClick={() => setFollowing(true)}>Add follow-up</Button>
+      <ButtonLink variant="primary" to={`/clients/estimates/new?client=${clientId}`}>New estimate</ButtonLink>
     </>
   );
   return (
     <>
-      <TopBar><a {...linkProps("/clients")}>Clients</a><Sep /><span className="here">{name}</span></TopBar>
+      <TopBar><a {...linkProps("/clients")}>Clients</a><Sep /><a {...linkProps("/clients")}>Companies</a><Sep /><span className="here">{name}</span></TopBar>
       <div className="wp-page cp">
         <a className="wp-setback" {...linkProps("/clients")}><Icon name="arrow-left" size={20} />Clients</a>
         <header className="cp-head">
@@ -299,6 +338,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
           </div>
           <div className="acts">{actions}</div>
         </header>
+        <MoneyTiles crm={crm} />
         <div className="ws-tabs cp-tabs">
           <Tabs label="Client" value={tab} onChange={setTab} items={[
             { key: "overview", label: "Overview" }, { key: "projects", label: "Projects", count: page.projects.length },
@@ -309,11 +349,13 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
         {tab === "overview" && (
           <div className="wp-homecols cp-overview">
             <div className="col">
+              <DealsCard crm={crm} clientId={clientId} />
               <Card className="cp-projects" label="Projects" head={<SectionHead label="Projects" count={page.projects.length} action={<ButtonLink size="sm" variant="ghost" to="/projects" icon="plus">New project</ButtonLink>} />}><ProjectRows page={page} max={4} /></Card>
               <Card className="cp-shared" label="Shared with them" head={<SectionHead label="Shared with them" count={page.shared.length} action={<Button size="sm" variant="ghost" onClick={() => setSharing(true)} iconEnd="chevron-right">Share a cut</Button>} />}><SharedRows page={page} max={5} /></Card>
               <Card className="cp-docs" label="Documents" head={<SectionHead label="Documents" count={page.documents.length} action={<ButtonLink size="sm" variant="ghost" to="/sign/new" icon="plus">New document</ButtonLink>} />}><DocRows page={page} max={5} /></Card>
             </div>
             <div className="col right">
+              <FollowUpsCard crm={crm} show={show} onAdd={() => setFollowing(true)} />
               <PeopleCard page={page} show={show} onAdd={() => setAdding(true)} />
               <InboxSummary events={events} names={names} onOpen={() => setTab("inbox")} />
             </div>
@@ -327,6 +369,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
       </div>
       {sharing && <ShareDialog target={{ kind: "client", client: name }} label={name} onClose={() => setSharing(false)} show={show} />}
       {adding && <AddPerson clientId={clientId} client={name} onClose={() => setAdding(false)} show={show} />}
+      {following && <AddFollowUp onClose={() => setFollowing(false)} show={show} eyebrow={name} clientId={clientId} />}
       {toast}
     </>
   );

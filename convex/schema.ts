@@ -772,6 +772,7 @@ export default defineSchema({
     about: v.string(),
     due: v.string(),                             // yyyy-mm-dd
     note: v.optional(v.string()),
+    remind: v.optional(v.union(v.literal("morning_of"), v.literal("day_before"))), // "Remind me" (Add follow-up dialog)
     doneAt: v.optional(v.number()),
     draft: v.optional(v.boolean()),              // made by Claude: does nothing until confirmed (D67)
     createdBy: v.optional(v.string()),
@@ -784,7 +785,8 @@ export default defineSchema({
     projectId: v.id("projects"),
     kind: v.union(v.literal("hours"), v.literal("cost")),
     workId: v.optional(v.string()),              // the kind of work (rates) the hours or cost is for
-    hours: v.optional(v.number()),
+    costId: v.optional(v.string()),              // which subcontractor cost (rates) the hours are paid at
+    hours: v.optional(v.number()),               // hours, or days for a kind billed per day
     cents: v.optional(v.number()),
     who: v.optional(v.string()),                 // "Heston", a subcontractor
     note: v.optional(v.string()),

@@ -14,10 +14,11 @@ import { ShareDialog } from "../review/Share";
 import { errText } from "../docs/pages/common";
 import Projects from "../review/Projects";
 import { ProjectInvoices } from "../payments/InvoicesPage";
+import { LedgerTab } from "../crm/Ledger";
 import { StageBar, STAGES, stageName, type Stage, dateText, bytes, openFileLink } from "./common";
 
 type Page = NonNullable<ReturnType<typeof useQuery<typeof api.projects.page>>>;
-export type ProjectTab = "overview" | "cuts" | "documents" | "invoices" | "delivery";
+export type ProjectTab = "overview" | "cuts" | "documents" | "invoices" | "delivery" | "ledger";
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 function cutChip(v: Page["videos"][number]) {
@@ -401,7 +402,7 @@ export default function ProjectPage({ projectId, tab }: { projectId: Id<"project
           <Tabs label="Project" value={tab} onChange={setTab} items={[
             { key: "overview", label: "Overview" }, { key: "cuts", label: "Cuts", count: page.videos.length },
             { key: "documents", label: "Documents", count: page.documents.length },
-            ...(payOn ? [{ key: "invoices" as ProjectTab, label: "Invoices" }] : []), { key: "delivery", label: "Delivery" },
+            ...(payOn ? [{ key: "invoices" as ProjectTab, label: "Invoices" }] : []), { key: "delivery", label: "Delivery" }, { key: "ledger", label: "Ledger" },
           ]} />
         </div>
         {tab === "overview" && <Overview page={page} onMove={setMoving} onRounds={() => setDialog("rounds")} onNext={() => setDialog("next")} onDates={() => setDialog("dates")} postDefault={postDefault} setPostDefault={setPostDefault} goTab={setTab} onAddFiles={() => setDialog("files")} />}
@@ -409,6 +410,7 @@ export default function ProjectPage({ projectId, tab }: { projectId: Id<"project
         {tab === "documents" && <Documents page={page} />}
         {tab === "invoices" && <ProjectInvoices projectId={projectId} clientId={page.client?._id ?? null} />}
         {tab === "delivery" && <Delivery page={page} show={show} onAddFiles={() => setDialog("files")} />}
+        {tab === "ledger" && <LedgerTab projectId={projectId} show={show} />}
       </div>
       {moving && <MoveStage page={page} to={moving} post={postDefault} onClose={() => setMoving(null)} show={show} />}
       {dialog === "rounds" && <RoundsDialog page={page} onClose={() => setDialog(null)} show={show} />}

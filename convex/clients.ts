@@ -108,7 +108,7 @@ export const account = query({
 
 type Access = { state: "none" } | { state: "invited"; at: number } | { state: "active"; since: number; lastSignInAt: number | null };
 
-async function accessOf(ctx: { db: MutationCtx["db"] } | { db: import("./_generated/server").QueryCtx["db"] }, email: string): Promise<Access> {
+export async function accessOf(ctx: { db: MutationCtx["db"] } | { db: import("./_generated/server").QueryCtx["db"] }, email: string): Promise<Access> {
   const inv = (await ctx.db.query("invites").withIndex("by_email", (q) => q.eq("email", email)).collect()).find((i) => !i.revokedAt);
   if (!inv) return { state: "none" };
   // Review (Oct 29): only this invite's own account; never another business's user found by email.

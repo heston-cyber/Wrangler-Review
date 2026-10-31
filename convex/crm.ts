@@ -13,11 +13,12 @@ import { requireMe } from "./lib/access";
 import { businessInScope, defaultBusiness } from "./lib/business";
 import { EMPTY_RATES, WRANGLER_RATES, estimate, primaryKind, ratesProblems, type EstimateInput, type Rates } from "./lib/estimate";
 import { applyArgs } from "./wsMcp";
+import { accessOf } from "./clients";
 import type { Fields } from "./lib/wsBuilder";
 
 export const STAGES = ["lead", "quoted", "contract_sent", "signed", "in_production", "delivered", "paid"] as const;
 export type Stage = (typeof STAGES)[number];
-const stageV = v.union(...STAGES.map((s) => v.literal(s))) as unknown as ReturnType<typeof v.literal<"lead">>;
+const stageV = v.union(v.literal("lead"), v.literal("quoted"), v.literal("contract_sent"), v.literal("signed"), v.literal("in_production"), v.literal("delivered"), v.literal("paid"));
 export const STAGE_NAME: Record<Stage, string> = { lead: "Lead", quoted: "Quoted", contract_sent: "Contract sent", signed: "Signed", in_production: "In production", delivered: "Delivered", paid: "Paid" };
 const label = (p: { name: string; jobNumber?: string }) => (p.jobNumber ? `${p.jobNumber} ${p.name}` : p.name);
 const todayIso = () => new Date(Date.now() - 6 * 3600_000).toISOString().slice(0, 10);
@@ -96,12 +97,13 @@ export const board = query({
     const deals = (await ctx.db.query("deals").collect()).filter((d) => !d.closedAt);
     const fus = (await ctx.db.query("followUps").collect()).filter((f) => !f.doneAt && !f.draft);
     const names = new Map<string, string>();
-    const out: Array<{ _id: Id<"deals">; title: string; stage: Stage; company: string | null; valueCents: number | null; website: boolean; followUp: string | null; updatedAt: number }> = [];
+    const out: Array<{ _id: Id<"deals">; title: string; stage: Stage; company: string | null; project: string | null; valueCents: number | null; website: boolean; followUp: string | null; updatedAt: number }> = [];
     for (const d of deals.sort((a, b) => b.updatedAt - a.updatedAt)) {
       if (d.clientId && !names.has(d.clientId)) names.set(d.clientId, (await ctx.db.get(d.clientId))?.name ?? "");
       const next = fus.filter((f) => f.dealId === d._id).sort((a, b) => a.due.localeCompare(b.due))[0];
+      const p = d.projectId ? await ctx.db.get(d.projectId) : null;
       out.push({ _id: d._id, title: d.title, stage: d.stage, company: d.clientId ? names.get(d.clientId) ?? null : d.lead?.company ?? d.lead?.name ?? null,
-        valueCents: d.valueCents ?? null, website: d.source === "website", followUp: next?.due ?? null, updatedAt: d.updatedAt });
+        project: p ? label(p) : null, valueCents: d.valueCents ?? null, website: d.source === "website", followUp: next?.due ?? null, updatedAt: d.updatedAt });
     }
     return { deals: out, stages: STAGES.map((s) => ({ key: s, name: STAGE_NAME[s], n: out.filter((d) => d.stage === s).length, cents: out.filter((d) => d.stage === s).reduce((t, d) => t + (d.valueCents ?? 0), 0) })) };
   },
@@ -133,6 +135,21 @@ export const moveDeal = mutation({
   },
 });
 
+/** Link a card to its project, so the project's stage, delivery and final invoice move the card (D60). */
+export const linkProject = mutation({
+  args: { dealId: v.id("deals"), projectId: v.union(v.id("projects"), v.null()) },
+  handler: async (ctx, { dealId, projectId }) => {
+    await ownerBiz(ctx);
+    const d = await ctx.db.get(dealId);
+    if (!d) throw new ConvexError("That card isn't here.");
+    const p = projectId ? await ctx.db.get(projectId) : null;
+    if (projectId && !p) throw new ConvexError("That project isn't here.");
+    await ctx.db.patch(dealId, { projectId: p?._id, ...(p?.clientId && !d.clientId ? { clientId: p.clientId } : {}), updatedAt: Date.now() });
+    if (d.estimateId && p) { const e = await ctx.db.get(d.estimateId); if (e && !e.projectId) await ctx.db.patch(e._id, { projectId: p._id }); }
+    return null;
+  },
+});
+
 /** "Not a lead", or take a card off the board (it isn't deleted). */
 export const closeDeal = mutation({
   args: { dealId: v.id("deals"), reason: v.optional(v.string()) },
@@ -156,7 +173,8 @@ export const deal = query({
     const project = d.projectId ? await ctx.db.get(d.projectId) : null;
     const estimates = (await ctx.db.query("estimates").withIndex("by_deal", (q) => q.eq("dealId", d._id)).collect()).map((e) => ({ _id: e._id, title: e.title, priceCents: (e.result as { priceCents: number }).priceCents, updatedAt: e.updatedAt }));
     const followUps = (await ctx.db.query("followUps").withIndex("by_deal", (q) => q.eq("dealId", d._id)).collect()).filter((f) => !f.doneAt);
-    return { ...d, stageName: STAGE_NAME[d.stage], company: client ? { _id: client._id, name: client.name } : null, project: project ? { _id: project._id, label: label(project) } : null, estimates, followUps };
+    const projects = (await ctx.db.query("projects").collect()).filter((x) => !d.clientId || x.clientId === d.clientId).sort((a, b) => b.createdAt - a.createdAt).slice(0, 50).map((x) => ({ _id: x._id, label: label(x) }));
+    return { ...d, projects, stageName: STAGE_NAME[d.stage], company: client ? { _id: client._id, name: client.name } : null, project: project ? { _id: project._id, label: label(project) } : null, estimates, followUps };
   },
 });
 
@@ -210,7 +228,7 @@ export const contact = query({
     const followUps = (await ctx.db.query("followUps").withIndex("by_client", (q) => q.eq("clientId", p.clientId)).collect()).filter((f) => !f.doneAt && (!f.email || f.email === p.email));
     const deals = (await ctx.db.query("deals").withIndex("by_client", (q) => q.eq("clientId", p.clientId)).collect()).filter((d) => !d.closedAt && (!d.contactEmail || d.contactEmail === p.email)).map((d) => ({ _id: d._id, title: d.title, stageName: STAGE_NAME[d.stage] }));
     const items = (await ctx.db.query("inboxItems").collect()).filter((i) => i.email === p.email).sort((a, b) => b.createdAt - a.createdAt).slice(0, 8).map((i) => ({ title: i.title, at: i.createdAt, read: !!i.readAt }));
-    return { _id: p._id, name: p.name ?? p.email, email: p.email, role: p.role, company: c ? { _id: c._id, name: c.name } : null, ...m, followUps, deals, activity: items };
+    return { _id: p._id, name: p.name ?? p.email, email: p.email, role: p.role, access: await accessOf(ctx, p.email), company: c ? { _id: c._id, name: c.name } : null, ...m, followUps, deals, activity: items };
   },
 });
 
@@ -232,13 +250,14 @@ export const followUps = query({
 });
 
 export const addFollowUp = mutation({
-  args: { who: v.string(), about: v.string(), due: v.string(), clientId: v.optional(v.id("clients")), dealId: v.optional(v.id("deals")), email: v.optional(v.string()), note: v.optional(v.string()) },
+  args: { who: v.string(), about: v.string(), due: v.string(), clientId: v.optional(v.id("clients")), dealId: v.optional(v.id("deals")), email: v.optional(v.string()), note: v.optional(v.string()),
+    remind: v.optional(v.union(v.literal("morning_of"), v.literal("day_before"))) },
   handler: async (ctx, a) => {
     const { me } = await ownerBiz(ctx);
-    if (!a.who.trim() || !a.about.trim()) throw new ConvexError("Who and what it's about, please.");
+    if (!a.who.trim()) throw new ConvexError("Who to follow up with, please.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(a.due)) throw new ConvexError("Pick a due date.");
     const d = a.dealId ? await ctx.db.get(a.dealId) : null;
-    return await ctx.db.insert("followUps", { who: a.who.trim().slice(0, 120), about: a.about.trim().slice(0, 300), due: a.due, ...(a.note?.trim() ? { note: a.note.trim().slice(0, 1000) } : {}),
+    return await ctx.db.insert("followUps", { who: a.who.trim().slice(0, 120), about: a.about.trim().slice(0, 300), due: a.due, ...(a.note?.trim() ? { note: a.note.trim().slice(0, 1000) } : {}), ...(a.remind ? { remind: a.remind } : {}),
       ...((a.clientId ?? d?.clientId) ? { clientId: a.clientId ?? d!.clientId } : {}), ...(a.dealId ? { dealId: a.dealId } : {}), ...(a.email ? { email: a.email.trim().toLowerCase() } : {}),
       createdBy: me.name ?? me.email, createdAt: Date.now() });
   },
@@ -368,6 +387,47 @@ export const makeContract = action({
 
 // ---------- the job ledger ----------
 
+type EstResult = { priceCents: number; expenseCents: number; netCents: number; lines: Array<{ kindId: string; name: string; qty: number; unit: "hour" | "day"; costCents: number }> };
+
+/** Estimate vs actual for one job. Hours (or days) logged cost what that subcontractor cost says (the one picked, or
+ *  every cost for that kind of work); money logged as a cost counts as it is. The actual price is what was billed
+ *  for the project (sent invoices, from the portal's copy of Stripe); before anything is billed, the estimate's price. */
+async function ledgerCalc(ctx: QueryCtx, p: Doc<"projects">, fallback: Rates) {
+  const deal = await ctx.db.query("deals").withIndex("by_project", (q) => q.eq("projectId", p._id)).first();
+  const est = (await ctx.db.query("estimates").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).sort((a, c) => c.updatedAt - a.updatedAt)[0]
+    ?? (deal?.estimateId ? await ctx.db.get(deal.estimateId) : null);
+  const r = (est?.rates as Rates | undefined) ?? fallback;
+  const e = est?.result as EstResult | undefined;
+  const entries = (await ctx.db.query("ledgerEntries").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).sort((a, c) => c.date.localeCompare(a.date) || c.createdAt - a.createdAt);
+  const rate = (x: Doc<"ledgerEntries">) => {
+    const c = x.costId ? r.costs.find((y) => y.id === x.costId) : null;
+    return c ? c.cents : r.costs.filter((y) => y.kindId === x.workId).reduce((t, y) => t + y.cents, 0);
+  };
+  const entryCents = (x: Doc<"ledgerEntries">) => (x.kind === "cost" ? x.cents ?? 0 : Math.round((x.hours ?? 0) * rate(x)));
+  const real = entries.filter((x) => !x.draft);
+  const kinds = r.kinds.map((k) => {
+    const mine = real.filter((x) => x.kind === "hours" && x.workId === k.id);
+    const line = e?.lines.find((l) => l.kindId === k.id);
+    return { id: k.id, name: k.name, unit: k.unit, estQty: line?.qty ?? 0, actQty: Math.round(mine.reduce((t, x) => t + (x.hours ?? 0), 0) * 100) / 100,
+      estCents: line?.costCents ?? 0, actCents: mine.reduce((t, x) => t + entryCents(x), 0) };
+  });
+  const otherCents = real.filter((x) => x.kind === "cost").reduce((t, x) => t + (x.cents ?? 0), 0);
+  const invoices = (await ctx.db.query("invoices").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).filter((i) => !["draft", "sending", "void"].includes(i.status));
+  const billedCents = invoices.reduce((t, i) => t + i.totalCents, 0);
+  const paidCents = invoices.reduce((t, i) => t + i.amountPaidCents - (i.refundedCents ?? 0), 0);
+  const estPrice = e?.priceCents ?? 0;
+  const price = billedCents || estPrice;
+  const expense = kinds.reduce((t, k) => t + k.actCents, 0) + otherCents;
+  const net = price - expense;
+  const reserve = Math.round((net * r.reservePct) / 100);
+  const estReserve = e ? Math.round((e.netCents * r.reservePct) / 100) : 0;
+  return {
+    r, est, entries, entryCents, kinds, otherCents, billedCents, paidCents,
+    estimate: est && e ? { _id: est._id, title: est.title, priceCents: estPrice, expenseCents: e.expenseCents, netCents: e.netCents, reserveCents: estReserve, ownerCents: e.netCents - estReserve } : null,
+    actual: { priceCents: price, billed: billedCents > 0, expenseCents: expense, netCents: net, reserveCents: reserve, ownerCents: net - reserve },
+  };
+}
+
 export const ledger = query({
   args: { projectId: v.string() },
   handler: async (ctx, { projectId }) => {
@@ -375,39 +435,30 @@ export const ledger = query({
     const id = ctx.db.normalizeId("projects", projectId);
     const p = id ? await ctx.db.get(id) : null;
     if (!p) return null;
-    const deal = (await ctx.db.query("deals").withIndex("by_project", (q) => q.eq("projectId", p._id)).first());
-    const est = (await ctx.db.query("estimates").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).sort((a, c) => c.updatedAt - a.updatedAt)[0]
-      ?? (deal?.estimateId ? await ctx.db.get(deal.estimateId) : null);
-    const r = (est?.rates as Rates | undefined) ?? (await ratesOf(ctx, b));
-    const entries = (await ctx.db.query("ledgerEntries").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).sort((a, c) => c.date.localeCompare(a.date) || c.createdAt - a.createdAt);
-    const real = entries.filter((x) => !x.draft);
-    const hours = (work: string) => real.filter((x) => x.kind === "hours" && x.workId === work).reduce((t, x) => t + (x.hours ?? 0), 0);
-    const costs = real.filter((x) => x.kind === "cost").reduce((t, x) => t + (x.cents ?? 0), 0);
-    // Hours logged cost what the rates say a subcontractor costs for that kind of work, unless a cost was logged instead.
-    const hourCost = r.kinds.reduce((t, k) => t + Math.round(hours(k.id) * r.costs.filter((c) => c.kindId === k.id).reduce((s, c) => s + c.cents, 0)), 0);
-    const est0 = est?.result as { priceCents: number; expenseCents: number; netCents: number; lines: Array<{ kindId: string; name: string; qty: number; unit: string }> } | undefined;
-    const price = est0?.priceCents ?? 0;
-    const actualExpense = hourCost + costs;
-    const net = price - actualExpense;
-    const reserve = Math.round((net * r.reservePct) / 100);
+    const L = await ledgerCalc(ctx, p, await ratesOf(ctx, b));
+    const exported = (await ctx.db.query("projects").collect()).filter((x) => x.ledgerExportedAt).length;
     return {
-      project: { _id: p._id, label: label(p) }, exportedAt: p.ledgerExportedAt ?? null, kinds: r.kinds.map((k) => ({ id: k.id, name: k.name, unit: k.unit })),
-      estimate: est ? { _id: est._id, title: est.title, priceCents: price, expenseCents: est0!.expenseCents, netCents: est0!.netCents, lines: est0!.lines } : null,
-      actual: { hours: Object.fromEntries(r.kinds.map((k) => [k.id, hours(k.id)])), hourCostCents: hourCost, costCents: costs, expenseCents: actualExpense, netCents: net, reserveCents: reserve, ownerCents: net - reserve, reservePct: r.reservePct },
-      entries: entries.map((x) => ({ ...x, work: r.kinds.find((k) => k.id === x.workId)?.name ?? null })),
+      project: { _id: p._id, label: label(p), clientId: p.clientId ?? null }, exportedAt: p.ledgerExportedAt ?? null, exportedJobs: exported,
+      reservePct: L.r.reservePct, kinds: L.kinds, otherCents: L.otherCents, billedCents: L.billedCents, paidCents: L.paidCents,
+      estimate: L.estimate, actual: L.actual,
+      costs: L.r.costs.map((c) => ({ id: c.id, name: c.name, kindId: c.kindId, cents: c.cents })),
+      entries: L.entries.map((x) => ({ _id: x._id, kind: x.kind, workId: x.workId ?? null, work: L.r.kinds.find((k) => k.id === x.workId)?.name ?? null,
+        unit: L.r.kinds.find((k) => k.id === x.workId)?.unit ?? "hour", cost: L.r.costs.find((c) => c.id === x.costId)?.name ?? null,
+        hours: x.hours ?? null, cents: L.entryCents(x), who: x.who ?? null, note: x.note ?? null, date: x.date, draft: !!x.draft, createdBy: x.createdBy ?? null })),
     };
   },
 });
 
 export const logEntry = mutation({
-  args: { projectId: v.id("projects"), kind: v.union(v.literal("hours"), v.literal("cost")), workId: v.optional(v.string()), hours: v.optional(v.number()), cents: v.optional(v.number()), who: v.optional(v.string()), note: v.optional(v.string()), date: v.string() },
+  args: { projectId: v.id("projects"), kind: v.union(v.literal("hours"), v.literal("cost")), workId: v.optional(v.string()), costId: v.optional(v.string()), hours: v.optional(v.number()), cents: v.optional(v.number()), who: v.optional(v.string()), note: v.optional(v.string()), date: v.string() },
   handler: async (ctx, a) => {
     const { me } = await ownerBiz(ctx);
     if (!(await ctx.db.get(a.projectId))) throw new ConvexError("That project isn't here.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(a.date)) throw new ConvexError("Pick a date.");
     if (a.kind === "hours" && !(Number(a.hours) > 0 && Number(a.hours) <= 500)) throw new ConvexError("Hours must be more than 0.");
+    if (a.costId) { const { b } = await ownerBiz(ctx); const r = await ratesOf(ctx, b); if (!r.costs.some((c) => c.id === a.costId && (!a.workId || c.kindId === a.workId))) throw new ConvexError("Pick a cost for that kind of work."); }
     if (a.kind === "cost" && !(Number.isInteger(a.cents) && a.cents! > 0)) throw new ConvexError("The cost must be more than $0.");
-    return await ctx.db.insert("ledgerEntries", { projectId: a.projectId, kind: a.kind, ...(a.workId ? { workId: a.workId } : {}), ...(a.kind === "hours" ? { hours: a.hours } : { cents: a.cents }),
+    return await ctx.db.insert("ledgerEntries", { projectId: a.projectId, kind: a.kind, ...(a.workId ? { workId: a.workId } : {}), ...(a.kind === "hours" && a.costId ? { costId: a.costId } : {}), ...(a.kind === "hours" ? { hours: a.hours } : { cents: a.cents }),
       ...(a.who?.trim() ? { who: a.who.trim().slice(0, 80) } : {}), ...(a.note?.trim() ? { note: a.note.trim().slice(0, 300) } : {}), date: a.date, createdBy: me.name ?? me.email, createdAt: Date.now() });
   },
 });
@@ -433,24 +484,35 @@ export const setLedgerExport = mutation({
   },
 });
 
+/** Export every job with an estimate (the Export dialog without "Only this job"). */
+export const setLedgerExportAll = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await ownerBiz(ctx);
+    const ids = new Set((await ctx.db.query("estimates").collect()).flatMap((e) => (e.projectId ? [e.projectId] : [])));
+    for (const d of await ctx.db.query("deals").collect()) if (d.projectId && d.estimateId) ids.add(d.projectId);
+    const now = Date.now();
+    let n = 0;
+    for (const id of ids) { if (await ctx.db.get(id)) { await ctx.db.patch(id, { ledgerExportedAt: now }); n++; } }
+    return n;
+  },
+});
+
 /** The "Job ledger" tab: one row per exported project (read by the Sheet feed with the business's sheet key). */
 export const ledgerRows = internalQuery({
   args: {},
   handler: async (ctx) => {
     const out = [];
+    const biz = businessInScope(ctx);
+    const b = biz ? await ctx.db.get(biz) : null;
+    const fallback = b ? await ratesOf(ctx, b) : WRANGLER_RATES;
     for (const p of (await ctx.db.query("projects").collect()).filter((x) => x.ledgerExportedAt)) {
-      const est = (await ctx.db.query("estimates").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).sort((a, c) => c.updatedAt - a.updatedAt)[0];
-      const r = (est?.rates as Rates | undefined) ?? WRANGLER_RATES;
-      const real = (await ctx.db.query("ledgerEntries").withIndex("by_project", (q) => q.eq("projectId", p._id)).collect()).filter((x) => !x.draft);
-      const hrs = (k: string) => real.filter((x) => x.kind === "hours" && x.workId === k).reduce((t, x) => t + (x.hours ?? 0), 0);
-      const hourCost = r.kinds.reduce((t, k) => t + Math.round(hrs(k.id) * r.costs.filter((c) => c.kindId === k.id).reduce((s, c) => s + c.cents, 0)), 0);
-      const costs = real.filter((x) => x.kind === "cost").reduce((t, x) => t + (x.cents ?? 0), 0);
-      const e = est?.result as { priceCents: number; expenseCents: number; netCents: number } | undefined;
-      const net = (e?.priceCents ?? 0) - hourCost - costs;
+      const L = await ledgerCalc(ctx, p, fallback);
       const usd = (c: number) => Math.round(c) / 100;
-      out.push({ "Project": label(p), "Estimate price": usd(e?.priceCents ?? 0), "Estimated expenses": usd(e?.expenseCents ?? 0), "Estimated profit": usd(e?.netCents ?? 0),
-        ...Object.fromEntries(r.kinds.filter((k) => k.unit === "hour").map((k) => [`${k.name} hours`, hrs(k.id)])),
-        "Actual expenses": usd(hourCost + costs), "Actual profit": usd(net), [`Reserve ${r.reservePct}%`]: usd(Math.round((net * r.reservePct) / 100)), [`Owner ${100 - r.reservePct}%`]: usd(net - Math.round((net * r.reservePct) / 100)),
+      out.push({ "Project": label(p), "Estimate price": usd(L.estimate?.priceCents ?? 0), "Estimated expenses": usd(L.estimate?.expenseCents ?? 0), "Estimated profit": usd(L.estimate?.netCents ?? 0),
+        ...Object.fromEntries(L.kinds.map((k) => [`${k.name} ${k.unit === "day" ? "days" : "hours"}`, k.actQty])),
+        "Billed": usd(L.billedCents), "Paid": usd(L.paidCents),
+        "Actual expenses": usd(L.actual.expenseCents), "Actual profit": usd(L.actual.netCents), [`Reserve ${L.r.reservePct}%`]: usd(L.actual.reserveCents), [`Owner ${100 - L.r.reservePct}%`]: usd(L.actual.ownerCents),
         "Exported": new Date(p.ledgerExportedAt!).toISOString().slice(0, 10) });
     }
     return out;
@@ -464,7 +526,8 @@ export const due = query({
   handler: async (ctx) => {
     await ownerBiz(ctx);
     const today = todayIso();
-    return (await ctx.db.query("followUps").collect()).filter((f) => !f.doneAt && !f.draft && f.due <= today).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 6).map((f) => ({ _id: f._id, who: f.who, about: f.about, due: f.due, overdue: f.due < today }));
+    const tomorrow = new Date(Date.parse(today + "T12:00:00Z") + 86_400_000).toISOString().slice(0, 10);
+    return (await ctx.db.query("followUps").collect()).filter((f) => !f.doneAt && !f.draft && (f.due <= today || (f.remind === "day_before" && f.due === tomorrow))).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 6).map((f) => ({ _id: f._id, who: f.who, about: f.about, due: f.due, overdue: f.due < today }));
   },
 });
 

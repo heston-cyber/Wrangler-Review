@@ -81,6 +81,17 @@ const PAGES: Record<string, { pages: Page[]; args: (ids: Ids, share: Share | nul
   "plans.list": { pages: ["owner"], args: () => "skip" }, // Payments › Plans
   "subscriptions.list": { pages: ["owner"], args: () => "skip" }, // Payments › Subscriptions
   "subscriptions.failRules": { pages: ["owner"], args: () => "skip" }, // Settings › Payments and a client's Settings tab (D64)
+  // Phase 3: the CRM, estimates and the job ledger (back office only, T3.5).
+  "crm.board": { pages: ["owner"], args: () => "skip" }, // Clients › Pipeline
+  "crm.companies": { pages: ["owner"], args: () => "skip" }, // Add lead's company picker
+  "crm.company": { pages: ["owner"], args: () => "skip" }, // the company page, an estimate for a company
+  "crm.contact": { pages: ["owner"], args: () => "skip" }, // a contact's page
+  "crm.deal": { pages: ["owner"], args: () => "skip" }, // a pipeline card's page, an estimate for a card
+  "crm.due": { pages: ["owner"], args: () => "skip" }, // owner Home: follow-ups due
+  "crm.followUps": { pages: ["owner"], args: () => "skip" }, // Clients › Follow-ups
+  "crm.getEstimate": { pages: ["owner"], args: () => "skip" }, // an estimate
+  "crm.ledger": { pages: ["owner"], args: () => "skip" }, // a project's Ledger tab
+  "crm.rates": { pages: ["owner"], args: () => "skip" }, // Settings › Estimate rates, the estimate page
   "subscriptions.get": { pages: ["owner"], args: () => "skip" }, // a subscription
   "subscriptions.page": { pages: ["share"], args: () => ({ token: "not-a-real-token-xx" }) }, // /sub/<token>, the client's page (with or without an account)
   "subscriptions.mine": { pages: ["clientHome"], args: () => ({}) }, // the client's Payments › Subscriptions

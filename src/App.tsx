@@ -33,6 +33,12 @@ const InvoiceEditor = lazy(() => import("./modules/payments/InvoiceEditor"));
 const InvoiceDetail = lazy(() => import("./modules/payments/InvoiceDetail"));
 const PaymentsOverview = lazy(() => import("./modules/payments/PaymentsOverview"));
 const PlansPage = lazy(() => import("./modules/payments/PlansPage"));
+// Phase 3: the CRM (Clients › Pipeline · Companies · Follow-ups), estimates and contacts.
+const Pipeline = lazy(() => import("./modules/crm/Pipeline"));
+const DealPage = lazy(() => import("./modules/crm/DealPage"));
+const FollowUps = lazy(() => import("./modules/crm/FollowUps"));
+const EstimatePage = lazy(() => import("./modules/crm/EstimatePage"));
+const ContactPage = lazy(() => import("./modules/crm/ContactPage"));
 const SubscriptionsPage = lazy(() => import("./modules/payments/SubscriptionsPage"));
 const StartSubscription = lazy(() => import("./modules/payments/SubscriptionsPage").then((m) => ({ default: m.StartSubscription })));
 const SubscriptionDetail = lazy(() => import("./modules/payments/SubscriptionsPage").then((m) => ({ default: m.SubscriptionDetail })));
@@ -147,7 +153,7 @@ function SignedIn() {
   const sentNote = /^\/sent\/([^/]+)\/?$/.exec(path);
   let page: React.ReactNode;
   if (video) page = <VideoPage key={video[1]} videoId={video[1] as Id<"videos">} versionNumber={Number(params.get("version")) || null} noteId={params.get("note")} />;
-  else if (project) { const t = params.get("tab"); page = <Suspense fallback={<Loading />}><ProjectPage key={project[1]} projectId={project[1] as Id<"projects">} tab={(["cuts", "documents", "invoices", "delivery"].includes(t ?? "") ? t : "overview") as ProjectTab} /></Suspense>; }
+  else if (project) { const t = params.get("tab"); page = <Suspense fallback={<Loading />}><ProjectPage key={project[1]} projectId={project[1] as Id<"projects">} tab={(["cuts", "documents", "invoices", "delivery", "ledger"].includes(t ?? "") ? t : "overview") as ProjectTab} /></Suspense>; }
   else if (path.startsWith("/projects")) page = <Projects key="all" />;
   else if (/^\/payments\/invoices\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><InvoiceEditor key={search} clientId={params.get("client")} projectId={params.get("project")} /></Suspense>;
   else if (/^\/payments\/invoices\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><InvoiceDetail key={id} invoiceId={id} /></Suspense>; }
@@ -168,6 +174,12 @@ function SignedIn() {
   else if (/^\/sign\/templates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3] as Id<"wsTemplates">; page = <Suspense fallback={<Loading />}><Builder key={id} mode={{ kind: "template", templateId: id }} /></Suspense>; }
   else if (/^\/sign\/templates\/?$/.test(path)) page = <Suspense fallback={<Loading />}><SignTemplates /></Suspense>;
   else if (path.startsWith("/sign")) page = <Suspense fallback={<Loading />}><SignHome /></Suspense>;
+  else if (/^\/clients\/pipeline\/?$/.test(path)) page = <Suspense fallback={<Loading />}><Pipeline /></Suspense>;
+  else if (/^\/clients\/follow-ups\/?$/.test(path)) page = <Suspense fallback={<Loading />}><FollowUps /></Suspense>;
+  else if (/^\/clients\/deals\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><DealPage key={id} dealId={id} /></Suspense>; }
+  else if (/^\/clients\/people\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><ContactPage key={id} personId={id} /></Suspense>; }
+  else if (/^\/clients\/estimates\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><EstimatePage key={search} dealId={params.get("deal")} clientId={params.get("client")} projectId={params.get("project")} /></Suspense>;
+  else if (/^\/clients\/estimates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><EstimatePage key={id} estimateId={id} /></Suspense>; }
   else if (/^\/clients\/?$/.test(path)) page = <ClientsPage />;
   else if (/^\/sent\/?$/.test(path)) page = <SentPage />;
   else if (sentNote && sentNote[1] !== "new") page = <SentNote key={sentNote[1]} noteId={sentNote[1] as Id<"inboxNotes">} sent={Number(params.get("sent")) || null} />;

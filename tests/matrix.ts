@@ -97,7 +97,7 @@ export function argsFor(ids: Ids): Record<string, Record<string, unknown>> {
     "crm.addFollowUp": { who: "A", about: "B", due: "2030-01-01" }, "crm.doneFollowUp": { followUpId: ids.followUpId }, "crm.getEstimate": { estimateId: "nope" },
     "crm.saveEstimate": { title: "E", scope: "S", input: { unit: "days", amount: 1 } }, "crm.makeContract": { estimateId: ids.estimateId }, "crm.ledger": { projectId: "nope" },
     "crm.logEntry": { projectId: ids.projectId, kind: "hours", hours: 1, date: "2030-01-01" }, "crm.entryAction": { entryId: ids.entryId, action: "confirm" },
-    "crm.setLedgerExport": { projectId: ids.projectId, on: true }, "crm.due": {},
+    "crm.setLedgerExport": { projectId: ids.projectId, on: true }, "crm.setLedgerExportAll": {}, "crm.due": {}, "crm.linkProject": { dealId: ids.dealId, projectId: ids.projectId },
     "plans.list": {}, "plans.get": { planId: ids.planId }, "plans.save": { name: "P", amountCents: 1000, interval: "month", intervalCount: 1 }, "plans.setArchived": { planId: ids.planId, archived: true },
     "invoices.send": { invoiceId: ids.invoiceId }, "invoices.voidInvoice": { invoiceId: ids.invoiceId },
     "invoicePay.page": { token: "nope-nope-nope-nope" }, "invoicePay.mine": {}, "invoicePay.markViewed": { token: "nope-nope-nope-nope" },

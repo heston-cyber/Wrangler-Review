@@ -41,12 +41,20 @@ const OWNER_DOCS: Sub[] = [
 const OWNER_PAYMENTS: Sub[] = [{ to: "/payments", label: "Overview", match: (p) => p === "/payments" }, { to: "/payments/invoices", label: "Invoices", match: (p) => starts(p, "/payments/invoices") },
   { to: "/payments/subscriptions", label: "Subscriptions", match: (p) => starts(p, "/payments/subscriptions") }, { to: "/payments/plans", label: "Plans", match: (p) => starts(p, "/payments/plans") }];
 const inPayments = (p: string) => starts(p, "/payments");
+// Phase 3 (Heston, Oct 29): Clients becomes a layer: Pipeline · Companies · Follow-ups. Companies is the client list.
+const CRM = ["/clients/pipeline", "/clients/follow-ups", "/clients/deals", "/clients/estimates"];
+const OWNER_CLIENTS: Sub[] = [
+  { to: "/clients/pipeline", label: "Pipeline", match: (p) => starts(p, "/clients/pipeline", "/clients/deals", "/clients/estimates") },
+  { to: "/clients", label: "Companies", match: (p) => starts(p, "/clients") && !CRM.some((x) => starts(p, x)) },
+  { to: "/clients/follow-ups", label: "Follow-ups", match: (p) => starts(p, "/clients/follow-ups") },
+];
+const inClients = (p: string) => starts(p, "/clients");
 const inReview = (p: string) => starts(p, "/review", "/projects", "/activity", "/v");
 const inDocs = (p: string) => starts(p, "/sign", "/docs");
 
 function ownerItems(payments = false): { main: Item[]; tabs: Item[] } {
   const home: Item = { to: "/", label: "Home", icon: "home", match: (p) => p === "/" };
-  const clients: Item = { to: "/clients", label: "Clients", icon: "users", match: (p) => starts(p, "/clients") };
+  const clients: Item = { to: "/clients", label: "Clients", icon: "users", match: () => false, tab: inClients, layer: OWNER_CLIENTS, layerHas: inClients };
   const review: Item = { to: "/review", label: "Review", icon: "review", match: (p) => p === "/review", tab: inReview, layer: OWNER_REVIEW, layerHas: inReview };
   const docs: Item = { to: "/sign", label: "Docs", icon: "document", match: (p) => p === "/sign", tab: inDocs, layer: OWNER_DOCS, layerHas: inDocs };
   const sent: Item = { to: "/sent", label: "Sent", icon: "send", match: (p) => starts(p, "/sent") };

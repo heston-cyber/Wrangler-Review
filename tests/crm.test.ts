@@ -112,3 +112,34 @@ describe("T3.4 totals, follow-ups, the ledger; T3.5 clients see none of it", () 
     expect(await w.boss.query(api.crm.company, { clientId: w.harbor })).toBeNull();
   });
 });
+
+describe("Phase 3 screens' extras (Oct 31)", () => {
+  test("a card linked to its project moves with it; day-before reminders; per-kind actuals at the picked cost; billed price; export all", async () => {
+    const w = await world();
+    const dealId = await w.heston.mutation(api.crm.addDeal, { title: "Launch", clientId: w.harbor });
+    await w.heston.mutation(api.crm.saveEstimate, { dealId, title: "Launch", scope: "", input: { unit: "days", amount: 4 } });
+    await w.heston.mutation(api.crm.linkProject, { dealId, projectId: w.p });
+    expect((await w.heston.query(api.crm.deal, { dealId })).projectId).toBe(w.p);
+    await w.heston.mutation(api.projects.setStage, { projectId: w.p, stage: "production", post: false });
+    expect((await w.heston.query(api.crm.deal, { dealId })).stage).toBe("in_production");
+    // The estimate now belongs to the project, so the ledger compares against it.
+    const tomorrow = new Date(Date.now() - 6 * 3600_000 + 86_400_000).toISOString().slice(0, 10);
+    await w.heston.mutation(api.crm.addFollowUp, { who: "Maya", about: "", due: tomorrow, remind: "day_before" });
+    await w.heston.mutation(api.crm.addFollowUp, { who: "Jordan", about: "", due: tomorrow });
+    expect((await w.heston.query(api.crm.due, {})).map((f: { who: string }) => f.who)).toEqual(["Maya"]);
+    await w.heston.mutation(api.crm.logEntry, { projectId: w.p, kind: "hours", workId: "editing", costId: "editor", hours: 10, date: "2026-10-31" });
+    await expect(w.heston.mutation(api.crm.logEntry, { projectId: w.p, kind: "hours", workId: "editing", costId: "shooter", hours: 1, date: "2026-10-31" })).rejects.toThrow(/Pick a cost/);
+    let l = await w.heston.query(api.crm.ledger, { projectId: w.p });
+    const editing = l.kinds.find((k: { id: string }) => k.id === "editing");
+    expect(editing).toMatchObject({ estQty: 64, actQty: 10, estCents: 576_000, actCents: 90_000 });
+    expect(l.actual).toMatchObject({ priceCents: 1_920_000, billed: false });
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("invoices", { businessId: w.A, clientId: w.harbor, projectId: w.p, kind: "deposit", title: "Deposit", billTo: { name: "M", email: "maya@harbor.example" }, lines: [], dueDate: "2030-01-01", history: [], createdAt: 0, updatedAt: 0,
+        status: "paid", totalCents: 480_000, amountPaidCents: 480_000, amountRemainingCents: 0 });
+    });
+    l = await w.heston.query(api.crm.ledger, { projectId: w.p });
+    expect(l).toMatchObject({ billedCents: 480_000, paidCents: 480_000, actual: { priceCents: 480_000, billed: true } });
+    expect(await w.heston.mutation(api.crm.setLedgerExportAll, {})).toBe(1);
+    expect((await w.heston.query(api.crm.ledger, { projectId: w.p })).exportedAt).toBeTruthy();
+  });
+});

@@ -5,11 +5,12 @@ import { Sep, TopBar } from "../../shell/Shell";
 import { Icon, type IconName } from "../../ui/Icon";
 import { linkProps } from "../../lib/router";
 
-export type SectionKey = "business" | "payments" | "account" | "register" | "dropbox" | "connectors" | "sheet" | "clients" | "shares";
+export type SectionKey = "business" | "payments" | "rates" | "account" | "register" | "dropbox" | "connectors" | "sheet" | "clients" | "shares";
 
 export const SECTIONS: Array<{ key: SectionKey; label: string; icon: IconName }> = [
   { key: "business", label: "Business", icon: "users" },
   { key: "payments", label: "Payments", icon: "invoice" },
+  { key: "rates", label: "Estimate rates", icon: "activity" }, // Phase 3 (263:1382)
   { key: "account", label: "Account", icon: "user" },
   { key: "register", label: "Register", icon: "register" },
   { key: "dropbox", label: "Dropbox drop folder", icon: "folder" },
@@ -21,7 +22,7 @@ export const SECTIONS: Array<{ key: SectionKey; label: string; icon: IconName }>
 
 // Old addresses still land on the right section: /register, /sign/connector, /settings#claude and the like, and
 // Dropbox's return to /settings?dropbox=….
-const HASH: Record<string, SectionKey> = { claude: "connectors", sign: "connectors", dropbox: "dropbox", sheet: "sheet", shares: "shares", clients: "clients", account: "account", business: "business", register: "register", payments: "payments" };
+const HASH: Record<string, SectionKey> = { claude: "connectors", sign: "connectors", dropbox: "dropbox", sheet: "sheet", shares: "shares", clients: "clients", account: "account", business: "business", register: "register", payments: "payments", rates: "rates" };
 export function sectionOf(path: string, search: string, hash: string): SectionKey | null {
   if (path.startsWith("/register")) return "register";
   if (path.startsWith("/sign/connector")) return "connectors";

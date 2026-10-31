@@ -8,6 +8,7 @@ import { Button, ButtonLink, Card, Divider, InboxItem, ListRow, PageHeader, Sect
 import type { IconName } from "../../ui/Icon";
 import { useToast } from "../../ui/kit";
 import { errText } from "../docs/pages/common";
+import { FollowUpRow } from "../crm/common";
 
 // Phase 2b: monthly recurring and any past-due subscription (loaded with the Payments code).
 const Recurring = lazy(() => import("../payments/PaymentsOverview").then((m) => ({ default: m.Recurring })));
@@ -116,6 +117,7 @@ export default function OwnerHome() {
   const needs = useQuery(api.home.needs);
   const recent = useQuery(api.activity.recent, { limit: 8 });
   const clients = useQuery(api.clients.directory);
+  const due = useQuery(api.crm.due, {}); // Phase 3: follow-ups due today or overdue
   const resend = useMutation(api.sign.resend);
   const [toast, show] = useToast();
   const now = Date.now();
@@ -134,6 +136,11 @@ export default function OwnerHome() {
               : needs.length === 0 ? <ListRow className="ilead quiet" lead={{ icon: "check-circle" }} title="New client notes, documents waiting on clients and drafts to confirm show up here." />
               : needs.map((n, i) => <div key={i} className="wp-rowwrap">{i > 0 && <Divider />}<NeedRow n={n} remind={remind} /></div>)}
           </Card>
+          {due && due.length > 0 && (
+            <Card label="Follow-ups" head={<SectionHead label="Follow-ups" count={due.length} action={<ButtonLink size="sm" variant="ghost" to="/clients/follow-ups">All follow-ups</ButtonLink>} />}>
+              {due.map((f, i) => <div key={f._id} className="wp-rowwrap">{i > 0 && <Divider />}<FollowUpRow f={f} show={show} /></div>)}
+            </Card>
+          )}
           {clients && clients.length > 0 && (
             <Card className="wp-homeclients" label="Your clients" head={<SectionHead label="Your clients" count={clients.length} action={<ButtonLink size="sm" variant="ghost" to="/clients">All clients</ButtonLink>} />}>
               {shownClients.map((c, i) => (
