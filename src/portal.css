@@ -2303,3 +2303,19 @@ button.inv-pdf { border: 0; background: none; cursor: pointer; font: inherit; fo
 .d64 { display: grid; gap: 4px; }
 .d64 b { font-weight: 500; color: var(--text-primary); }
 .d64 .secondary { font-size: var(--fs-text-small); }
+
+/* ---------- Phase 3c · Vendors (730:2 list, 730:1153 vendor page, 732:2909 Add vendor) ---------- */
+.vd-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.vd-tile { display: grid; gap: 4px; padding: 16px 18px; border-radius: 16px; box-shadow: inset 0 0 0 1px var(--border-faint); }
+.vd-tile .wp-eyebrow { margin: 0; }
+.vd-tile b { font: 600 24px/1.2 var(--font-title); }
+.vd-pad { padding: 4px 20px 16px; margin: 0; }
+.vd-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.vd-row b { font-weight: 500; }
+.vd-cost { margin: -2px 0 6px; }
+.vd-gear { display: flex; flex-wrap: wrap; gap: 6px; }
+.vd-notes { white-space: pre-wrap; }
+.vd-rate { display: flex; gap: 8px; }
+.vd-rate select { width: 100px; flex: 0 0 auto; }
+.vd-archive { justify-self: start; }
+@media (max-width: 760px) { .vd-tiles { grid-template-columns: minmax(0, 1fr); } }

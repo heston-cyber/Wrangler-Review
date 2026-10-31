@@ -58,6 +58,9 @@ const NewProposal = lazy(() => import("./modules/proposals/Proposals").then((m) 
 const ProposalTemplates = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalTemplates })));
 const ProposalBuilder = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalBuilder })));
 const ClientProposal = lazy(() => import("./modules/proposals/ClientProposal"));
+// Phase 3c: Vendors (D95: its own layer).
+const VendorsPage = lazy(() => import("./modules/vendors/Vendors"));
+const VendorPage = lazy(() => import("./modules/vendors/Vendors").then((m) => ({ default: m.VendorPage })));
 const QuestionnaireEditor = lazy(() => import("./modules/proposals/Questionnaire").then((m) => ({ default: m.QuestionnaireEditor })));
 const QuestionnaireRunner = lazy(() => import("./modules/proposals/Questionnaire").then((m) => ({ default: m.QuestionnaireRunner })));
 // Wrangler Sign (S1): its own chunk, so pdf.js only loads on those pages.
@@ -196,6 +199,8 @@ function SignedIn() {
   else if (/^\/sign\/templates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3] as Id<"wsTemplates">; page = <Suspense fallback={<Loading />}><Builder key={id} mode={{ kind: "template", templateId: id }} /></Suspense>; }
   else if (/^\/sign\/templates\/?$/.test(path)) page = <Suspense fallback={<Loading />}><SignTemplates /></Suspense>;
   else if (path.startsWith("/sign")) page = <Suspense fallback={<Loading />}><SignHome /></Suspense>;
+  else if (/^\/vendors\/?$/.test(path)) page = <Suspense fallback={<Loading />}><VendorsPage /></Suspense>;
+  else if (/^\/vendors\/[^/]+\/?$/.test(path)) { const id = path.split("/")[2]; page = <Suspense fallback={<Loading />}><VendorPage key={id} vendorId={id} /></Suspense>; }
   else if (/^\/proposals\/?$/.test(path)) page = <Suspense fallback={<Loading />}><ProposalsPage /></Suspense>;
   else if (/^\/proposals\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><NewProposal key={search} clientId={params.get("client")} dealId={params.get("deal")} /></Suspense>;
   else if (/^\/proposals\/questionnaire\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuestionnaireEditor /></Suspense>;

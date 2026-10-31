@@ -862,6 +862,29 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_token", ["token"]).index("by_build", ["buildId"]).index("by_client", ["clientId"]).index("by_deal", ["dealId"]).index("by_updated", ["updatedAt"]),
 
+  // Phase 3c · Vendors (D91–D104): the subcontractors a business hires. One row per business per vendor (D94: the same
+  // person working for two businesses has two rows, each seen only by its business). W-9 per business (D100); payment
+  // details are the method and a note only, never bank numbers (D101).
+  vendors: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    name: v.string(),
+    email: v.string(),                                   // lower-case; the vendor portal login (step 4)
+    roles: v.array(v.string()),                          // Shooter, Editor, Drone pilot…
+    rates: v.array(v.object({ role: v.string(), unit: v.union(v.literal("day"), v.literal("hour")), cents: v.number() })),
+    basedIn: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    portfolio: v.optional(v.string()),
+    gear: v.optional(v.array(v.string())),
+    notes: v.optional(v.string()),
+    invitedAt: v.optional(v.number()),                   // invited to the vendor portal
+    joinedAt: v.optional(v.number()),                    // signed in to it
+    w9: v.optional(v.object({ fileId: v.id("_storage"), name: v.string(), uploadedAt: v.number() })),
+    payMethod: v.optional(v.object({ method: v.string(), note: v.optional(v.string()) })),
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_email", ["email"]),
+
   // Phase 3b (review fix): the files uploaded for a proposal's questionnaire answers. Only these are served or copied.
   proposalFiles: defineTable({
     businessId: v.optional(v.id("businesses")),

@@ -18,6 +18,7 @@ import type * as brandKit from "../brandKit.js";
 import type * as crm from "../crm.js";
 import type * as proposals from "../proposals.js";
 import type * as quotes from "../quotes.js";
+import type * as vendors from "../vendors.js";
 import type * as leads from "../leads.js";
 import type * as plans from "../plans.js";
 import type * as subscriptionClock from "../subscriptionClock.js";
@@ -131,6 +132,7 @@ declare const fullApi: ApiFromModules<{
   crm: typeof crm;
   proposals: typeof proposals;
   quotes: typeof quotes;
+  vendors: typeof vendors;
   leads: typeof leads;
   plans: typeof plans;
   subscriptionClock: typeof subscriptionClock;

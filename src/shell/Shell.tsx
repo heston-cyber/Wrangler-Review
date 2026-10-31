@@ -50,6 +50,9 @@ const OWNER_PROPOSALS: Sub[] = [
   { to: "/proposals/questionnaire", label: "Questionnaire", match: (p) => starts(p, "/proposals/questionnaire") },
 ];
 const inProposals = (p: string) => starts(p, "/proposals");
+// Phase 3c (D95): Vendors is its own layer after Payments. Bookings, Briefings and Payments join as they're built.
+const OWNER_VENDORS: Sub[] = [{ to: "/vendors", label: "All vendors", match: (p) => starts(p, "/vendors") }];
+const inVendors = (p: string) => starts(p, "/vendors");
 // Phase 3 (Heston, Oct 29): Clients becomes a layer: Pipeline · Companies · Follow-ups. Companies is the client list.
 const CRM = ["/clients/pipeline", "/clients/follow-ups", "/clients/deals", "/clients/estimates"];
 const OWNER_CLIENTS: Sub[] = [
@@ -67,11 +70,12 @@ function ownerItems(payments = false): { main: Item[]; tabs: Item[] } {
   const review: Item = { to: "/review", label: "Review", icon: "review", match: (p) => p === "/review", tab: inReview, layer: OWNER_REVIEW, layerHas: inReview };
   const docs: Item = { to: "/sign", label: "Docs", icon: "document", match: (p) => p === "/sign", tab: inDocs, layer: OWNER_DOCS, layerHas: inDocs };
   const proposals: Item = { to: "/proposals", label: "Proposals", icon: "quote", match: () => false, tab: inProposals, layer: OWNER_PROPOSALS, layerHas: inProposals };
+  const vendors: Item = { to: "/vendors", label: "Vendors", icon: "user", match: () => false, tab: inVendors, layer: OWNER_VENDORS, layerHas: inVendors };
   const sent: Item = { to: "/sent", label: "Sent", icon: "send", match: (p) => starts(p, "/sent") };
-  const more: Item = { to: "/more", label: "More", icon: "menu", match: (p) => starts(p, "/more", "/sent", "/settings", "/payments", "/proposals") };
+  const more: Item = { to: "/more", label: "More", icon: "menu", match: (p) => starts(p, "/more", "/sent", "/settings", "/payments", "/proposals", "/vendors") };
   // Phase 2 Part B: Payments › Invoices once the business has connected Stripe (D45).
   const pay: Item = { to: "/payments", label: "Payments", icon: "invoice", match: () => false, tab: inPayments, layer: OWNER_PAYMENTS, layerHas: inPayments };
-  return { main: payments ? [home, clients, review, docs, proposals, pay, sent] : [home, clients, review, docs, proposals, sent], tabs: [home, clients, review, docs, more] };
+  return { main: payments ? [home, clients, review, docs, proposals, pay, vendors, sent] : [home, clients, review, docs, proposals, vendors, sent], tabs: [home, clients, review, docs, more] };
 }
 
 type SharedProject = { to: string; label: string };
@@ -316,6 +320,7 @@ export function MorePage({ me, side }: { me: Me; side: Side }) {
   const rows: { to?: string; icon: IconName; title: string; sub?: string; onClick?: () => void }[] = side === "owner"
     ? [
       { to: "/proposals", icon: "quote", title: "Proposals", sub: "Written pitches, templates" },
+      { to: "/vendors", icon: "user", title: "Vendors", sub: "Shooters, editors and crew you hire" },
       ...payRow,
       { to: "/sent", icon: "send", title: "Sent", sub: "Notes and items you sent" },
       { to: "/settings", icon: "settings", title: "Settings", sub: "Business, Register, Dropbox, connectors…" },
