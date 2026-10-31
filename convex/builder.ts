@@ -254,9 +254,12 @@ export const updateTemplate = mutation({
   args: { templateId: v.id("wsTemplates"), name: v.string(), description: v.optional(v.string()), blocks: v.any(), fields: v.any(), style: v.any() },
   handler: async (ctx, a) => {
     await requireMe(ctx);
-    if (!(await ctx.db.get(a.templateId))) throw new ConvexError("That template doesn't exist.");
+    const t0 = await ctx.db.get(a.templateId);
+    if (!t0) throw new ConvexError("That template doesn't exist.");
     tooBig(a.blocks, a.fields, a.style);
-    await ctx.db.patch(a.templateId, { name: clean(a.name) || "Untitled template", description: clean(a.description ?? "", 300) || undefined, blocks: a.blocks, fields: a.fields, style: a.style, updatedAt: Date.now() });
+    // A proposal template never keeps prices (review fix): they come from Settings › Pricing each time.
+    const blocks = isProposal(t0) && isPage(a.blocks) && !Array.isArray(a.blocks) ? withoutPrices(a.blocks as Page) : a.blocks;
+    await ctx.db.patch(a.templateId, { name: clean(a.name) || "Untitled template", description: clean(a.description ?? "", 300) || undefined, blocks, fields: a.fields, style: a.style, updatedAt: Date.now() });
     return null;
   },
 });
@@ -552,7 +555,7 @@ export const createBuildFor = internalMutation({
   args: { title: v.string(), page: v.any(), fields: v.optional(v.any()), signers: v.optional(v.any()), templateId: v.optional(v.id("wsTemplates")) },
   handler: async (ctx, a) => {
     const t = a.templateId ? await ctx.db.get(a.templateId) : null;
-    if (a.templateId && !t) throw new ConvexError("That template doesn't exist.");
+    if (a.templateId && (!t || isProposal(t))) throw new ConvexError("That template doesn't exist.");
     const tf = (t?.fields as Partial<Fields> | undefined) ?? {};
     const fields = { project: tf.project ?? "", custom: tf.custom ?? [], ...((a.fields as Partial<Fields>) ?? {}) };
     return insertBuild(ctx, { title: a.title, page: a.page ? pageOf(a.page) : pageOf(t?.blocks), fields, signers: a.signers as ExtraSigner[] | undefined, style: t ? (t.style as Style) : undefined, templateId: t?._id });

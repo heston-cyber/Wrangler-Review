@@ -127,4 +127,29 @@ describe("proposal questionnaire", () => {
     const r = await w.t.fetch("/ws-mcp", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_proposal", arguments: { proposal: "WRNGLR-P-0001" } } }) });
     expect((await r.json()).result.isError).toBe(true);
   });
+
+  test("review fixes: nobody else's upload is deleted or borrowed; finishing twice makes one lead; Start the contract twice makes one draft; template prices stay out", async () => {
+    const w = await world();
+    const file = () => w.t.run((ctx) => ctx.storage.store(new Blob(["x"], { type: "image/png" })));
+    const exists = (id: string) => w.t.run(async (ctx) => !!(await ctx.db.system.get(id as Id<"_storage">)));
+    const id = await w.heston.mutation(api.proposals.startQuestionnaire, {}) as Id<"proposals">;
+    const theirs = await file();
+    expect(await w.boss.mutation(api.proposals.addAnswerFile, { proposalId: id, storageId: theirs, name: "x" })).toMatchObject({ error: expect.any(String) });
+    await expect(w.t.action(api.proposals.send, { proposalId: id, storageId: theirs })).rejects.toThrow();
+    expect(await exists(theirs)).toBe(true); // refused without touching the file
+    // A file id typed into the answers by hand is dropped; one uploaded for this proposal is kept.
+    const mine = await w.heston.mutation(api.proposals.addAnswerFile, { proposalId: id, storageId: await file(), name: "logo.png" });
+    await w.heston.mutation(api.proposals.saveAnswers, { proposalId: id, answers: { ...answers({ mode: "new", company: "Spirit Days", name: "Sam Patel", email: "sam@x.co", saveAs: "lead" }), logo: [mine, { fileId: theirs, name: "theirs", size: 1, type: "image/png" }] } });
+    expect((await w.heston.query(api.proposals.get, { proposalId: id })).answers.logo).toEqual([mine]);
+    await w.heston.mutation(api.proposals.finish, { proposalId: id, how: "claude" });
+    await w.heston.mutation(api.proposals.finish, { proposalId: id, how: "claude" }); // Edit answers, then finish again
+    expect((await w.heston.query(api.crm.board, {})).deals).toHaveLength(1);
+    // A proposal template keeps no prices, however it's saved.
+    const tpl = await w.heston.mutation(api.proposals.newTemplate, {});
+    const t0 = await w.heston.query(api.builder.getTemplate, { templateId: tpl });
+    const page = pageOf(t0.blocks);
+    page.content = page.content.map((n) => n.type === "items" ? { ...n, attrs: { ...n.attrs, rows: [{ id: "r", description: "Shoot", qty: 1, rate: 900 }] } } : n);
+    await w.heston.mutation(api.builder.updateTemplate, { templateId: tpl, name: "T", blocks: page, fields: t0.fields, style: t0.style });
+    expect(totals(pageOf((await w.heston.query(api.builder.getTemplate, { templateId: tpl })).blocks)).total).toBe(0);
+  });
 });

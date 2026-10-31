@@ -23,6 +23,8 @@ export type Questionnaire = { steps: Step[] };
 /** Questions the portal itself reads (the client, the pricing parts): their type can't change and they can't go. */
 export const LOCKED_BINDS = new Set(["client", "pricing.days", "pricing.level", "pricing.travel", "pricing.model", "pricing.schedule", "pricing.deposit"]);
 export const PRICING_MODELS = ["Fixed price", "Per day", "Hourly", "Retainer"]; // D82
+/** The locked questions keep their type whatever is saved. */
+const LOCKED_TYPE: Record<string, QType> = { client: "client", "pricing.days": "number", "pricing.level": "select", "pricing.travel": "number", "pricing.model": "select", "pricing.schedule": "select", "pricing.deposit": "deposit" };
 
 const q = (id: string, label: string, type: QType, more: Partial<Question> = {}): Question => ({ id, label, type, ...more });
 
@@ -82,19 +84,20 @@ export function cleanQuestionnaire(x: unknown): Questionnaire {
   const steps = (x as Questionnaire)?.steps;
   if (!Array.isArray(steps) || !steps.length || steps.length > 12) throw new Error("A questionnaire has 1 to 12 steps.");
   const seen = new Set<string>();
+  const qIds = new Set<string>(["__lines"]); // ids are answer keys: unique across the whole questionnaire
   const out: Step[] = steps.map((s, i) => {
     const qs = Array.isArray(s?.questions) ? s.questions : [];
     if (qs.length > 20) throw new Error(`"${clip(s?.title, 40)}" has more than 20 questions.`);
     const id = clip(s?.id, 40) || `s${i}`;
     if (seen.has(id)) throw new Error("Two steps share an id.");
     seen.add(id);
-    const qIds = new Set<string>();
     return {
       id, title: clip(s.title, 40) || `Step ${i + 1}`, heading: clip(s.heading, 120) || clip(s.title, 40) || `Step ${i + 1}`, sub: clip(s.sub, 300),
       ...(s.fixed === "client" || s.fixed === "pricing" ? { fixed: s.fixed } : {}),
       questions: qs.map((qq, j) => {
-        const type = TYPES.has(qq?.type) ? qq.type : "short";
-        let qid = clip(qq?.id, 40) || `q${j}`;
+        const bind = clip(qq?.bind, 40);
+        const type: QType = LOCKED_TYPE[bind] ?? (TYPES.has(qq?.type) ? qq.type : "short");
+        let qid = (clip(qq?.id, 40) || `q${j}`).replace(/^_+/, "q");
         while (qIds.has(qid)) qid = `${qid}_`;
         qIds.add(qid);
         const options = Array.isArray(qq.options) ? qq.options.map((o: unknown) => clip(o, 80)).filter(Boolean).slice(0, 30) : undefined;

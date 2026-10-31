@@ -229,6 +229,8 @@ export default function Builder({ mode }: { mode: Mode }) {
   // panels alike. Changes made within a second of each other (typing a sentence, dragging a colour) are one step.
   const docRef = useRef<BuildDoc | null>(null);
   docRef.current = doc;
+  const metaRef = useRef(meta);
+  metaRef.current = meta;
   const hist = useRef<{ past: BuildDoc[]; future: BuildDoc[]; at: number }>({ past: [], future: [], at: 0 });
   const [, setHistTick] = useState(0);
   const setDoc = useCallback((f: (d: BuildDoc) => BuildDoc) => {
@@ -272,10 +274,12 @@ export default function Builder({ mode }: { mode: Mode }) {
     if (locked) { setDirty(false); return; } // a sent proposal doesn't change (the server refuses it too)
     setSaveState("saving");
     const t = setTimeout(async () => {
+      const savedDoc = doc, savedMeta = meta;
       try {
         if (mode.kind === "build") await saveBuild({ buildId: mode.buildId, title: doc.title, blocks: doc.page, fields: doc.fields, signers: doc.signers, style: doc.style });
         else await updateTemplate({ templateId: mode.templateId, name: meta.name || doc.title, description: meta.description, blocks: doc.page, fields: { project: doc.fields.project, custom: doc.fields.custom }, style: doc.style });
-        setDirty(false); setSaveState("saved");
+        // Phase 3b review fix: an edit made while this save was on its way keeps the page dirty, so it saves too.
+        if (docRef.current === savedDoc && metaRef.current === savedMeta) { setDirty(false); setSaveState("saved"); }
       } catch (e) { setSaveState("error"); show(errText(e)); }
     }, 700);
     return () => clearTimeout(t);
@@ -375,7 +379,10 @@ export default function Builder({ mode }: { mode: Mode }) {
   const onSend = async (message: string, move: boolean) => {
     if (!prop) return;
     try {
-      if (dirty) { await saveBuild({ buildId: prop.buildId, title: doc.title, blocks: doc.page, fields: doc.fields, signers: doc.signers, style: doc.style }); setDirty(false); }
+      // Always save first (review fix): the server checks and freezes the saved copy, so it must match the PDF.
+      const sent = doc;
+      await saveBuild({ buildId: prop.buildId, title: sent.title, blocks: sent.page, fields: sent.fields, signers: sent.signers, style: sent.style });
+      if (docRef.current === sent) setDirty(false);
       const blob = await render();
       const storageId = await uploadToStorage(await uploadUrl({}), new File([blob], `${prop.number} ${doc.title}.pdf`, { type: "application/pdf" }));
       const r = await sendProposal({ proposalId: prop._id, storageId, message: message.trim() || undefined, move });

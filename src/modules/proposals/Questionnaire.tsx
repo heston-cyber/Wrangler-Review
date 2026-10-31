@@ -63,7 +63,7 @@ function suggestions(r: Rates | undefined, qn: Questionnaire, a: Answers): PLine
 function mergeLines(cur: PLine[], sugg: PLine[]): PLine[] {
   const next = sugg.map((s) => {
     const old = cur.find((l) => l.auto === s.auto);
-    return old && old.unitCents !== old.suggestedCents ? { ...s, description: old.description, unitCents: old.unitCents } : s;
+    return old && old.unitCents !== old.suggestedCents ? { ...s, unitCents: old.unitCents } : s; // the price typed over stays; the wording follows the answers
   });
   return [...next, ...cur.filter((l) => !l.auto)];
 }
@@ -95,15 +95,21 @@ export function QuestionnaireRunner({ proposalId, preview }: { proposalId?: stri
   const sugg = useMemo(() => (qn && a ? suggestions(r, qn, a) : []), [r, qn, a]);
   const suggKey = JSON.stringify(sugg);
   useEffect(() => {
-    if (!a) return;
+    if (!a || !qn) return;
+    // Shoot days cleared to type a new number: keep the lines (and any typed-over price) until there's a number again.
+    if (bound(qn, a, "pricing.days") === "") return;
     const next = mergeLines(a.__lines ?? [], sugg);
     if (JSON.stringify(next) !== JSON.stringify(a.__lines ?? [])) { setA({ ...a, __lines: next }); setDirty(true); }
   }, [suggKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // Save a moment after the last change.
+  const aRef = useRef<Answers | null>(null);
+  aRef.current = a;
   useEffect(() => {
     if (!dirty || !a || preview || !p) return;
     const t = setTimeout(async () => {
-      try { await save({ proposalId: p._id, answers: a, step }); setDirty(false); setSavedAt(Date.now()); } catch (e) { show(errText(e)); }
+      const sent = a;
+      // A change typed while this save was on its way stays unsaved-and-dirty, so its own save still runs.
+      try { await save({ proposalId: p._id, answers: sent, step }); if (aRef.current === sent) setDirty(false); setSavedAt(Date.now()); } catch (e) { show(errText(e)); }
     }, 700);
     return () => clearTimeout(t);
   }, [a, dirty, step]); // eslint-disable-line react-hooks/exhaustive-deps

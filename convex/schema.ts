@@ -862,6 +862,15 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_token", ["token"]).index("by_build", ["buildId"]).index("by_client", ["clientId"]).index("by_deal", ["dealId"]).index("by_updated", ["updatedAt"]),
 
+  // Phase 3b (review fix): the files uploaded for a proposal's questionnaire answers. Only these are served or copied.
+  proposalFiles: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    proposalId: v.id("proposals"),
+    storageId: v.id("_storage"),
+    name: v.string(), size: v.number(), type: v.string(),
+    createdAt: v.number(),
+  }).index("by_proposal", ["proposalId"]).index("by_storage", ["storageId"]),
+
   // The job ledger (a project tab): hours and costs logged against the project, compared with its estimate.
   ledgerEntries: defineTable({
     businessId: v.optional(v.id("businesses")),

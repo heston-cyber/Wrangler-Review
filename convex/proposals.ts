@@ -24,7 +24,7 @@ import { corsHeaders } from "./signing";
 import { fillAgreement, moveCardFor, newAgreementDraft } from "./crm";
 import { defaultStyle, insertBuild } from "./builder";
 import { nodesOf, pageOf, totals, type BuildDoc, type ExtraSigner, type Fields, type ItemRow, type Page, type Style } from "./lib/wsBuilder";
-import { proposalProblems, proposalStarterPage, sectionCount } from "./lib/wsProposal";
+import { proposalProblems, proposalStarterPage, sectionCount, withoutPrices } from "./lib/wsProposal";
 import { WRANGLER_QUESTIONNAIRE, answerList, bound, cleanQuestionnaire, linesTotal, outlineFromAnswers, type Answers, type ClientAnswer, type FileAnswer, type PLine, type Questionnaire } from "./lib/questionnaire";
 import { EMPTY_KIT, MAX_FILE_BYTES, MAX_FILES, linkLabel, type Kit } from "./brandKit";
 import { pageToMarkdown } from "./lib/wsPageMd";
@@ -34,6 +34,8 @@ const MAX_PDF_BYTES = 25 * 1024 * 1024;
 export const proposalLink = (token: string) => `${SITE()}/p/${token}`;
 const when = (t: number) => new Date(t).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const OPEN = new Set(["draft", "waiting", "ready"]);
+// Review fix: an upload must be new (made in the last 30 minutes) to be used, so a stored file's id can't be borrowed.
+const fresh = (f: { _creationTime: number }) => Date.now() - f._creationTime < 30 * 60_000;
 
 async function ownerBiz(ctx: QueryCtx | MutationCtx) {
   const me = await requireMe(ctx);
@@ -145,7 +147,7 @@ async function makeProposal(ctx: MutationCtx, me: { name?: string | null; email:
     const tf = (t?.fields as Partial<Fields> | undefined) ?? {};
     const project = deal?.title || tf.project || "";
     const buildId = await insertBuild(ctx, {
-      title: project || client.company || (t ? t.name : "New proposal"), page: t ? pageOf(t.blocks) : proposalStarterPage(),
+      title: project || client.company || (t ? t.name : "New proposal"), page: t ? withoutPrices(pageOf(t.blocks)) : proposalStarterPage(),
       fields: { project, custom: tf.custom ?? [], client: { name: "", company: "", email: "", phone: "", address: "", ...client } },
       ...(t ? { style: t.style as Style, templateId: t._id } : {}),
     });
@@ -235,14 +237,18 @@ export const markSent = internalMutation({
       await ctx.db.patch(p._id, { updatedAt: now, history: [...p.history, { kind: "resent", at: now, by: by(me), detail: p.contact?.email }].slice(-60) });
       return { key: `proposal-sent:${p._id}:${now}` };
     }
-    if (p.status === "waiting") throw new ConvexError("Claude is still drafting this one.");
-    if (!OPEN.has(p.status)) throw new ConvexError("This proposal has already been sent.");
+    // Review fix: from here the caller owns this proposal, so a refused upload is theirs to drop. Refusals return an
+    // error (a throw would roll the delete back); a file that isn't a fresh PDF upload is never touched or used.
+    if (!a.storageId) return { error: "The PDF didn't upload. Try again." };
+    const file = await ctx.db.system.get(a.storageId);
+    if (!file || !fresh(file) || (file.contentType && file.contentType !== "application/pdf") || file.size > MAX_PDF_BYTES) return { error: "The PDF didn't upload. Try again." };
+    const refuse = async (error: string) => { await ctx.storage.delete(a.storageId!).catch(() => null); return { error }; };
+    if (p.filling) return refuse("Finish the questionnaire first.");
+    if (p.status === "waiting") return refuse("Claude is still drafting this one.");
+    if (!OPEN.has(p.status)) return refuse("This proposal has already been sent.");
     const d = docOf(build);
     const problems = proposalProblems(d);
-    if (problems.length) throw new ConvexError(problems[0]);
-    if (!a.storageId) throw new ConvexError("The PDF didn't upload. Try again.");
-    const file = await ctx.db.system.get(a.storageId);
-    if (!file || file.size > MAX_PDF_BYTES) throw new ConvexError("The PDF didn't upload. Try again.");
+    if (problems.length) return refuse(problems[0]);
     const t = totals(d.page);
     const contact = { name: d.fields.client.name.trim().slice(0, 120), email: d.fields.client.email.trim().toLowerCase().slice(0, 254), ...(d.fields.client.company.trim() ? { company: d.fields.client.company.trim().slice(0, 120) } : {}) };
     let dealId = p.dealId ?? null;
@@ -274,9 +280,9 @@ export const mailData = internalQuery({
 export const send = action({
   args: { proposalId: v.id("proposals"), storageId: v.optional(v.id("_storage")), message: v.optional(v.string()), move: v.optional(v.boolean()), resend: v.optional(v.boolean()) },
   handler: async (ctx, a): Promise<{ held: boolean }> => {
-    let key: string;
-    try { ({ key } = await ctx.runMutation(internal.proposals.markSent, { proposalId: a.proposalId, storageId: a.storageId, message: a.message, move: a.move, resend: !!a.resend })); }
-    catch (e) { if (a.storageId && !a.resend) await ctx.storage.delete(a.storageId).catch(() => null); throw e; }
+    const m = await ctx.runMutation(internal.proposals.markSent, { proposalId: a.proposalId, storageId: a.storageId, message: a.message, move: a.move, resend: !!a.resend });
+    if (m.error !== undefined || !m.key) throw new ConvexError(m.error ?? "That didn't send. Try again.");
+    const key = m.key;
     const d = (await ctx.runQuery(internal.proposals.mailData, { proposalId: a.proposalId }))!;
     const r = await deliverOnce(ctx, key, "proposal", d.contact.email,
       proposalMail(d.brand, { name: d.contact.name, number: d.p.number, title: d.title, totalCents: d.p.totalCents ?? 0, sentAt: d.p.sentAt ?? Date.now(), message: d.p.message ?? null, link: d.link }), d.brand.replyTo);
@@ -338,9 +344,12 @@ export const linkContract = internalMutation({
   handler: async (ctx, { proposalId, buildId }) => {
     const { me } = await ownerBiz(ctx);
     const p = await ctx.db.get(proposalId);
-    if (!p) return;
+    if (!p) return buildId;
+    // Review fix: two clicks at once both make a draft; the first one linked wins and the other is dropped.
+    if (p.made?.buildId && p.made.buildId !== buildId && (await ctx.db.get(p.made.buildId))) { if (await ctx.db.get(buildId)) await ctx.db.delete(buildId); return p.made.buildId; }
     const now = Date.now();
     await ctx.db.patch(proposalId, { made: { buildId }, asked: { ...(p.asked ?? {}), contract: "done" }, updatedAt: now, history: [...p.history, { kind: "contract_drafted", at: now, by: by(me) }].slice(-60) });
+    return buildId;
   },
 });
 
@@ -357,8 +366,7 @@ export const startContract = action({
       company: who.company ?? "", signer: { name: who.name, email: who.email }, project: t.project, depositPercent: t.depositPct,
       lines: t.rows.map((r) => ({ description: r.description, qty: Number(r.qty) || 0, rateCents: cents(Number(r.rate) || 0) })),
     });
-    await ctx.runMutation(internal.proposals.linkContract, { proposalId, buildId });
-    return buildId;
+    return (await ctx.runMutation(internal.proposals.linkContract, { proposalId, buildId })) as Id<"wsBuilds">;
   },
 });
 
@@ -518,8 +526,8 @@ export const saveAnswers = mutation({
     const p = await ctx.db.get(a.proposalId);
     if (!p) throw new ConvexError("That proposal isn't here.");
     if (!OPEN.has(p.status)) throw new ConvexError("This proposal has been sent; its answers can't change.");
-    if (!a.answers || typeof a.answers !== "object" || JSON.stringify(a.answers).length > MAX_ANSWERS) throw new ConvexError("Those answers are too long.");
-    const answers = { ...(a.answers as Answers), __lines: cleanLines((a.answers as Answers).__lines) };
+    if (!a.answers || typeof a.answers !== "object" || Array.isArray(a.answers) || JSON.stringify(a.answers).length > MAX_ANSWERS) throw new ConvexError("Those answers are too long.");
+    const answers = { ...keepOwn(a.answers as Answers, await ownFiles(ctx, p._id)), __lines: cleanLines((a.answers as Answers).__lines) };
     await ctx.db.patch(p._id, { answers, ...(a.step !== undefined ? { qStep: Math.max(0, Math.min(20, Math.round(a.step))) } : {}), updatedAt: Date.now() });
     return null;
   },
@@ -534,23 +542,39 @@ export const addAnswerFile = mutation({
   handler: async (ctx, a): Promise<FileAnswer | { error: string }> => {
     await ownerBiz(ctx);
     const p = await ctx.db.get(a.proposalId);
+    if (!p) return { error: "That proposal isn't here." }; // nothing deleted: the caller may not own the file
     const meta = await ctx.db.system.get(a.storageId);
+    if (!meta || !fresh(meta)) return { error: "The file didn't upload. Try again." };
+    if (await ctx.db.query("proposalFiles").withIndex("by_storage", (q) => q.eq("storageId", a.storageId)).first()) return { error: "That file is already in use." };
     const refuse = async (error: string) => { await ctx.storage.delete(a.storageId).catch(() => null); return { error }; };
-    if (!p || !OPEN.has(p.status)) return refuse("This proposal can't take files now.");
-    if (!meta) return { error: "The file didn't upload. Try again." };
+    if (!OPEN.has(p.status)) return refuse("This proposal can't take files now.");
     if (meta.size > MAX_FILE_BYTES) return refuse("That file is over 25 MB. Link to it instead (videos especially).");
-    if (filesIn(p.answers as Answers | undefined).length >= MAX_FILES) return refuse(`Up to ${MAX_FILES} files a proposal. Link to the rest instead.`);
-    return { fileId: a.storageId, name: a.name.trim().slice(0, 160) || "File", size: meta.size, type: meta.contentType ?? "" };
+    const had = await ctx.db.query("proposalFiles").withIndex("by_proposal", (q) => q.eq("proposalId", p._id)).collect();
+    if (had.length >= MAX_FILES) return refuse(`Up to ${MAX_FILES} files a proposal. Link to the rest instead.`);
+    const f = { fileId: a.storageId, name: a.name.trim().slice(0, 160) || "File", size: meta.size, type: meta.contentType ?? "" };
+    await ctx.db.insert("proposalFiles", { proposalId: p._id, storageId: a.storageId, name: f.name, size: f.size, type: f.type, createdAt: Date.now() });
+    return f;
   },
 });
 const filesIn = (a: Answers | undefined): FileAnswer[] => Object.values(a ?? {}).flatMap((x) => (Array.isArray(x) ? x.filter((f) => f && typeof f === "object" && "fileId" in f) as FileAnswer[] : []));
+/** Review fix: only files uploaded for this proposal count; a file id typed into the answers by hand is dropped. */
+async function ownFiles(ctx: QueryCtx, proposalId: Id<"proposals">) {
+  return new Set((await ctx.db.query("proposalFiles").withIndex("by_proposal", (q) => q.eq("proposalId", proposalId)).collect()).map((f) => f.storageId as string));
+}
+function keepOwn(a: Answers, own: Set<string>): Answers {
+  const out: Answers = {};
+  for (const [k, x] of Object.entries(a)) out[k] = Array.isArray(x) ? x.filter((f) => !(f && typeof f === "object" && "fileId" in f) || own.has(String((f as FileAnswer).fileId))) : x;
+  return out;
+}
 export const fileUrls = query({
   args: { proposalId: v.id("proposals") },
   handler: async (ctx, { proposalId }) => {
     await ownerBiz(ctx);
     const p = await ctx.db.get(proposalId);
     const out: Record<string, string | null> = {};
-    for (const f of filesIn(p?.answers as Answers | undefined)) out[f.fileId] = await ctx.storage.getUrl(f.fileId as Id<"_storage">);
+    if (!p) return out;
+    const own = await ownFiles(ctx, p._id);
+    for (const f of filesIn(p.answers as Answers | undefined)) if (own.has(f.fileId)) out[f.fileId] = await ctx.storage.getUrl(f.fileId as Id<"_storage">);
     return out;
   },
 });
@@ -586,7 +610,7 @@ async function resolveClient(ctx: MutationCtx, me: { name?: string | null; email
 }
 
 /** The brand answers go into the company's brand kit (D71), added to what's there; a lead keeps them on the proposal. */
-async function fillKit(ctx: MutationCtx, clientId: Id<"clients">, qn: Questionnaire, a: Answers) {
+async function fillKit(ctx: MutationCtx, clientId: Id<"clients">, qn: Questionnaire, a: Answers, own: Set<string>) {
   const c = await ctx.db.get(clientId);
   if (!c) return;
   const kit: Kit = { ...EMPTY_KIT, ...((c.brandKit as Partial<Kit> | undefined) ?? {}) };
@@ -597,7 +621,7 @@ async function fillKit(ctx: MutationCtx, clientId: Id<"clients">, qn: Questionna
   const links = (bound(qn, a, "brand.links") as string[] | string | undefined) ?? [];
   for (const u of (Array.isArray(links) ? links : [links]).map((x) => String(x).trim()).filter((x) => /^https?:\/\//i.test(x))) if (!kit.links.some((l) => l.url === u)) kit.links.push({ url: u.slice(0, 500), label: linkLabel(u) });
   for (const w of ((bound(qn, a, "brand.tone") as string[] | undefined) ?? [])) if (w && !kit.tone.includes(w)) kit.tone.push(String(w).slice(0, 40));
-  const logo = ((bound(qn, a, "brand.logo") as FileAnswer[] | undefined) ?? []);
+  const logo = ((bound(qn, a, "brand.logo") as FileAnswer[] | undefined) ?? []).filter((f) => own.has(f.fileId));
   const now = Date.now();
   logo.forEach((f, i) => {
     if (i === 0 && !kit.logoFileId && /image\//.test(f.type)) kit.logoFileId = f.fileId as Id<"_storage">;
@@ -624,16 +648,21 @@ export const finish = mutation({
       if (qq.required && (v0 === undefined || v0 === null || v0 === "" || (Array.isArray(v0) && !v0.length))) throw new ConvexError(`Answer "${qq.label}" (${s.title}).`);
     }
     const title = String(bound(qn, ans, "project.title") ?? "").trim().slice(0, 120);
-    const who = await resolveClient(ctx, me, bound(qn, ans, "client") as ClientAnswer | undefined, title);
+    let cAns = bound(qn, ans, "client") as ClientAnswer | undefined;
+    // Review fix: finishing again (Edit answers) reuses the lead or company the first finish made.
+    if (cAns?.mode === "new" && (p.dealId || p.clientId)) cAns = { ...cAns, mode: "existing", ...(p.clientId ? { clientId: p.clientId } : {}), ...(p.dealId ? { dealId: p.dealId } : {}) };
+    const who = await resolveClient(ctx, me, cAns, title);
+    const clientQ = qn.steps.flatMap((s) => s.questions).find((x) => x.bind === "client");
+    const newAnswers = clientQ && cAns ? { ...ans, [clientQ.id]: { ...cAns, mode: "existing", ...(who.clientId ? { clientId: who.clientId } : {}), ...(who.dealId ? { dealId: who.dealId } : {}) } } : ans;
     const clientId = who.clientId ?? p.clientId;
-    if (clientId) await fillKit(ctx, clientId, qn, ans);
+    if (clientId) await fillKit(ctx, clientId, qn, ans, await ownFiles(ctx, p._id));
     const f = build.fields as Fields;
     const fields: Fields = { ...f, project: title || f.project, client: { ...f.client, name: who.name, email: who.email, company: who.company } };
     const fresh = !!p.filling || p.status === "waiting"; // never overwrite a page Claude or the owner already wrote
     await ctx.db.patch(build._id, { title: title || build.title, fields, ...(fresh ? { blocks: outlineFromAnswers(qn, ans) } : {}), updatedAt: Date.now() });
     const now = Date.now();
     await ctx.db.patch(p._id, {
-      filling: false, status: a.how === "claude" ? "waiting" : p.status === "waiting" ? "draft" : p.status, ...(clientId ? { clientId } : {}), ...(who.dealId ? { dealId: who.dealId } : {}), updatedAt: now,
+      filling: false, answers: newAnswers, status: a.how === "claude" ? "waiting" : p.status === "waiting" ? "draft" : p.status, ...(clientId ? { clientId } : {}), ...(who.dealId ? { dealId: who.dealId } : {}), updatedAt: now,
       history: [...p.history, { kind: a.how === "claude" ? "asked_claude" : "filled_in", at: now, by: by(me) }].slice(-60),
     });
     return null;
@@ -733,7 +762,8 @@ export const connectorGet = internalQuery({
     const t = totals(d.page);
     const brandAnswers = { colors: bound(qn, ans, "brand.colors") ?? [], fonts: { heading: bound(qn, ans, "brand.heading") ?? null, body: bound(qn, ans, "brand.body") ?? null }, links: bound(qn, ans, "brand.links") ?? [], tone_words: bound(qn, ans, "brand.tone") ?? [] };
     const files = [];
-    for (const f of filesIn(ans)) files.push({ name: f.name, type: f.type, url: await ctx.storage.getUrl(f.fileId as Id<"_storage">) });
+    const own = await ownFiles(ctx, p._id);
+    for (const f of filesIn(ans)) if (own.has(f.fileId)) files.push({ name: f.name, type: f.type, url: await ctx.storage.getUrl(f.fileId as Id<"_storage">) });
     return {
       number: p.number, status: p.status, filling: !!p.filling, title: build.title, link: `${SITE()}/proposals/${p._id}`,
       client: { name: d.fields.client.name, email: d.fields.client.email, company: d.fields.client.company }, project: d.fields.project,
@@ -755,6 +785,8 @@ export const connectorWrite = internalMutation({
     if (!p || !build) throw new ConvexError("That proposal isn't here.");
     if (!OPEN.has(p.status)) throw new ConvexError(`Proposal ${p.number} has been sent, so it can't change.`);
     if (p.filling) throw new ConvexError(`Heston hasn't finished the questionnaire for ${p.number} yet.`);
+    // Review fix: a draft Heston is writing himself isn't replaced under him (his open builder would save over it).
+    if (p.status === "draft") throw new ConvexError(`Heston is writing ${p.number} himself in the builder. Ask him to press Draft with Claude first, or tell him what to change.`);
     const page = pageOf(a.page);
     if (nodesOf(page, "signatures").length) throw new ConvexError("Proposals aren't signed: leave out the signature block.");
     if (JSON.stringify(page).length > 400_000) throw new ConvexError("That's too much content for one proposal.");
