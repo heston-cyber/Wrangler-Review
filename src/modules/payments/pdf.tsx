@@ -5,7 +5,7 @@ import { Document, Image, Page, StyleSheet, Text, View, pdf } from "@react-pdf/r
 import { totals, type Line } from "./common";
 
 export type PdfData = {
-  kind: "invoice" | "receipt";
+  kind: "invoice" | "receipt" | "quote"; // Phase 3b: a quote in the invoice layout (721:7878), titled QUOTE
   business: { name: string; legalName: string | null; email: string | null; logoLightUrl: string | null; address?: string | null; privacyUrl?: string | null };
   number: string; issued: string; due: string; paidOn?: string | null; method?: string | null;
   billTo: { name: string; email: string; company?: string }; project?: string | null;
@@ -13,6 +13,7 @@ export type PdfData = {
   memo?: string | null; payUrl?: string | null;
   payments?: Array<{ at: string; method: string; cents: number }>;
   thanks?: string | null; // the receipt's last line
+  quote?: { validUntil: string; depositLabel: string; depositCents: number; acceptUrl: string | null };
 };
 
 const INK = "#1a1817", MUTED = "#6b6862", FAINT = "#9a968f", RULE = "#d9d5cc", ACCENT = "#e00000", PAPER = "#f5f3ee";
@@ -55,9 +56,10 @@ export function InvoicePdf({ d, size }: { d: PdfData; size: "LETTER" | "A4" }) {
   const t = totals({ lines: d.lines, discountCents: d.discountCents, taxPercent: d.taxPercent });
   const remaining = Math.max(0, d.totalCents - d.amountPaidCents);
   const receipt = d.kind === "receipt";
+  const quote = d.kind === "quote" ? d.quote ?? null : null;
   const legal = legalLine(d.business);
   return (
-    <Document title={`${receipt ? "Receipt" : "Invoice"} ${d.number}`} author={d.business.name} creator="WranglerPortal" producer="WranglerPortal">
+    <Document title={`${quote ? "Quote" : receipt ? "Receipt" : "Invoice"} ${d.number}`} author={d.business.name} creator="WranglerPortal" producer="WranglerPortal">
       <Page size={size} style={s.page}>
         <View style={s.head}>
           <View style={s.who}>
@@ -65,7 +67,7 @@ export function InvoicePdf({ d, size }: { d: PdfData; size: "LETTER" | "A4" }) {
             <View><Text style={s.bizName}>{d.business.name}</Text>{legal && <Text style={s.legal}>{legal}</Text>}</View>
           </View>
           <View style={s.kindBox}>
-            <Text style={s.kind}>{receipt ? "Receipt" : "Invoice"}</Text>
+            <Text style={s.kind}>{quote ? "Quote" : receipt ? "Receipt" : "Invoice"}</Text>
             <Text style={s.num}>{d.number}</Text>
             {receipt && <Text style={s.paidTag}>{remaining === 0 ? "Paid in full" : "Payment received"}</Text>}
           </View>
@@ -73,7 +75,7 @@ export function InvoicePdf({ d, size }: { d: PdfData; size: "LETTER" | "A4" }) {
 
         <View style={s.meta}>
           <View>
-            <Text style={s.lbl}>Bill to</Text>
+            <Text style={s.lbl}>{quote ? "For" : "Bill to"}</Text>
             <View style={s.billLines}>
               <Text>{d.billTo.name}</Text>
               {d.billTo.company ? <Text>{d.billTo.company}</Text> : null}
@@ -86,7 +88,7 @@ export function InvoicePdf({ d, size }: { d: PdfData; size: "LETTER" | "A4" }) {
               {d.method ? <View style={s.fact}><Text style={s.lbl}>Method</Text><Text>{d.method}</Text></View> : null}
             </> : <>
               <View style={s.fact}><Text style={s.lbl}>Issued</Text><Text>{d.issued}</Text></View>
-              <View style={s.fact}><Text style={s.lbl}>Due</Text><Text>{d.due}</Text></View>
+              <View style={s.fact}><Text style={s.lbl}>{quote ? "Valid until" : "Due"}</Text><Text>{quote ? quote.validUntil : d.due}</Text></View>
             </>}
             {d.project ? <View style={s.fact}><Text style={s.lbl}>Project</Text><Text>{d.project}</Text></View> : null}
           </View>
@@ -106,8 +108,11 @@ export function InvoicePdf({ d, size }: { d: PdfData; size: "LETTER" | "A4" }) {
           <View style={s.sum}><Text style={s.sumMuted}>Discount</Text><Text>{t.discount ? `-${usd(t.discount)}` : "—"}</Text></View>
           <View style={s.sum}><Text style={s.sumMuted}>Tax</Text><Text>{t.tax ? `${usd(t.tax)} (${d.taxPercent}%)` : "—"}</Text></View>
           <View style={s.tot}><Text>Total</Text><Text style={s.big}>{usd(d.totalCents)}</Text></View>
+          {quote ? <View style={s.sum}><Text style={s.sumMuted}>{quote.depositLabel}</Text><Text>{usd(quote.depositCents)}</Text></View> : null}
+          {quote ? null : <>
           <View style={s.sum}><Text style={s.sumMuted}>Amount paid</Text><Text>{d.amountPaidCents ? `- ${usd(d.amountPaidCents)}` : usd(0)}</Text></View>
           <View style={s.sum}><Text>{receipt ? "Amount remaining" : "Amount due"}</Text><Text style={s.big}>{usd(remaining)}</Text></View>
+          </>}
         </View>
 
         {d.payments && d.payments.length > 0 && (
@@ -118,7 +123,8 @@ export function InvoicePdf({ d, size }: { d: PdfData; size: "LETTER" | "A4" }) {
         )}
 
         {(receipt ? d.thanks : d.memo) ? <Text style={s.memo}>{receipt ? d.thanks : d.memo}</Text> : null}
-        {!receipt && d.payUrl && remaining > 0 ? <Text style={s.payUrl}>Pay online: {d.payUrl.replace(/^https?:\/\//, "")}</Text> : null}
+        {!receipt && !quote && d.payUrl && remaining > 0 ? <Text style={s.payUrl}>Pay online: {d.payUrl.replace(/^https?:\/\//, "")}</Text> : null}
+        {quote?.acceptUrl ? <Text style={s.payUrl}>Accept online: {quote.acceptUrl.replace(/^https?:\/\//, "")}</Text> : null}
 
         <View style={s.foot} fixed>
           <View style={{ gap: 3 }}>

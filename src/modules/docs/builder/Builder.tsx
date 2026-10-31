@@ -3,6 +3,7 @@
 // Style · Details. It edits either a build (a document on its way to signing) or a template. Everything saves as you go.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import type { Editor } from "@tiptap/react";
 import { TextSelection } from "@tiptap/pm/state";
 import {
@@ -30,9 +31,21 @@ import { marginSelect, pickableBlocks } from "./editor/blockSelection";
 import { touchDragger, type TouchDragView } from "./touchDrag";
 import { errText, uploadToStorage } from "../pages/common";
 import { Icon } from "../../../ui/Icon";
-import { Button, IconButton, SkeletonRows, EmptyState, ButtonLink, StatusChip as Chip } from "../../../ui/wp";
+import { Button, IconButton, SkeletonRows, EmptyState, ButtonLink, StatusChip as Chip, Checkbox, DialogHeader, TextArea } from "../../../ui/wp";
+import { proposalProblems } from "../../../../convex/lib/wsProposal";
 
-type Mode = { kind: "build"; buildId: Id<"wsBuilds"> } | { kind: "template"; templateId: Id<"wsTemplates"> };
+// Phase 3b: proposals open here too (S5 · Phase 3b 716:4980 / 718:4495): no signature boxes, Send instead of
+// "Continue to signing", locked once sent, and "Start the contract?" once accepted (D75, D84).
+export type ProposalInfo = NonNullable<FunctionReturnType<typeof api.proposals.get>>;
+type Mode = { kind: "build"; buildId: Id<"wsBuilds">; proposal?: ProposalInfo } | { kind: "template"; templateId: Id<"wsTemplates">; proposal?: boolean };
+const P_OPEN = new Set(["draft", "waiting", "ready"]);
+const P_CHIP: Record<string, { tone: "neutral" | "accent" | "success" | "danger" | "warning"; text: string }> = {
+  draft: { tone: "neutral", text: "Draft" }, waiting: { tone: "warning", text: "Waiting for Claude" }, ready: { tone: "accent", text: "Ready" }, sent: { tone: "accent", text: "Sent" },
+  accepted: { tone: "success", text: "Accepted" }, declined: { tone: "danger", text: "Declined" }, void: { tone: "neutral", text: "Withdrawn" },
+};
+export const ProposalChip = ({ status }: { status: string }) => <Chip tone={P_CHIP[status]?.tone ?? "neutral"}>{P_CHIP[status]?.text ?? status}</Chip>;
+const longDay = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const longWhen = (t: number) => new Date(t).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 type Tab = "insert" | "format" | "style" | "details";
 type Meta = { name: string; description: string };
 
@@ -52,6 +65,9 @@ const INSERT: Array<{ kind: InsertKind; icon: React.ReactNode; hint: string }> =
 ];
 
 export default function Builder({ mode }: { mode: Mode }) {
+  const prop = mode.kind === "build" ? mode.proposal ?? null : null;
+  const isProp = !!prop || (mode.kind === "template" && !!mode.proposal);
+  const locked = !!prop && !P_OPEN.has(prop.status);
   const build = useQuery(api.builder.getBuild, mode.kind === "build" ? { buildId: mode.buildId } : "skip");
   const tpl = useQuery(api.builder.getTemplate, mode.kind === "template" ? { templateId: mode.templateId } : "skip");
   const profile = useQuery(api.builder.getProfile);
@@ -65,7 +81,16 @@ export default function Builder({ mode }: { mode: Mode }) {
   const uploadUrl = useMutation(api.builder.uploadUrl);
   const toSigning = useAction(api.builder.toSigning);
   const ensureGoogle = useAction(api.builder.ensureGoogleFont);
+  const sendProposal = useAction(api.proposals.send);
+  const startContract = useAction(api.proposals.startContract);
+  const createProposal = useMutation(api.proposals.create);
+  const proposalLater = useMutation(api.proposals.later);
+  const withdrawProposal = useMutation(api.proposals.withdraw);
+  const copyProposal = useMutation(api.proposals.copy);
+  const dismissDrafted = useMutation(api.proposals.dismissDrafted);
   const [toast, show] = useToast();
+  const [sending, setSending] = useState(false);
+  const [contracting, setContracting] = useState(false);
 
   const [doc, setDocRaw] = useState<BuildDoc | null>(null);
   const [meta, setMeta] = useState<Meta>({ name: "", description: "" });
@@ -131,10 +156,10 @@ export default function Builder({ mode }: { mode: Mode }) {
   const phoneNow = typeof matchMedia === "function" && matchMedia("(max-width: 599px)").matches;
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    const lock = picking || (phoneNow && sheet);
+    const lock = locked || picking || (phoneNow && sheet);
     if (editor.isEditable !== !lock) editor.setEditable(!lock);
     if (lock) (editor.view.dom as HTMLElement).blur();
-  }, [editor, sheet, picking, phoneNow]);
+  }, [editor, sheet, picking, phoneNow, locked]);
 
   // Phones: while typing, the line with the cursor stays in view: above the keyboard and the bottom bar, below the top
   // bar. Checked when the selection moves, as text is typed, and when the keyboard opens or the screen scrolls.
@@ -204,6 +229,8 @@ export default function Builder({ mode }: { mode: Mode }) {
   // panels alike. Changes made within a second of each other (typing a sentence, dragging a colour) are one step.
   const docRef = useRef<BuildDoc | null>(null);
   docRef.current = doc;
+  const metaRef = useRef(meta);
+  metaRef.current = meta;
   const hist = useRef<{ past: BuildDoc[]; future: BuildDoc[]; at: number }>({ past: [], future: [], at: 0 });
   const [, setHistTick] = useState(0);
   const setDoc = useCallback((f: (d: BuildDoc) => BuildDoc) => {
@@ -244,12 +271,15 @@ export default function Builder({ mode }: { mode: Mode }) {
   // Save a moment after the last change.
   useEffect(() => {
     if (!dirty || !doc) return;
+    if (locked) { setDirty(false); return; } // a sent proposal doesn't change (the server refuses it too)
     setSaveState("saving");
     const t = setTimeout(async () => {
+      const savedDoc = doc, savedMeta = meta;
       try {
         if (mode.kind === "build") await saveBuild({ buildId: mode.buildId, title: doc.title, blocks: doc.page, fields: doc.fields, signers: doc.signers, style: doc.style });
         else await updateTemplate({ templateId: mode.templateId, name: meta.name || doc.title, description: meta.description, blocks: doc.page, fields: { project: doc.fields.project, custom: doc.fields.custom }, style: doc.style });
-        setDirty(false); setSaveState("saved");
+        // Phase 3b review fix: an edit made while this save was on its way keeps the page dirty, so it saves too.
+        if (docRef.current === savedDoc && metaRef.current === savedMeta) { setDirty(false); setSaveState("saved"); }
       } catch (e) { setSaveState("error"); show(errText(e)); }
     }, 700);
     return () => clearTimeout(t);
@@ -283,10 +313,14 @@ export default function Builder({ mode }: { mode: Mode }) {
   }, []);
   const onSelectText = useCallback(() => setTab("format"), []);
 
+  // Opening a declined proposal is seeing it: it leaves Home.
+  useEffect(() => { if (prop?.status === "declined" && !prop.asked.seen) void proposalLater({ proposalId: prop._id, what: "seen" }).catch(() => undefined); }, [prop?.status, prop?.asked.seen]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const missingKey = doc ? missingFields(doc.page, doc.fields).sort().join(",") : "";
   const missing = useMemo(() => new Set(missingKey ? missingKey.split(",") : []), [missingKey]);
 
   if (!doc) return <><TopBar><a {...linkProps("/sign")}>Docs</a></TopBar><div className="wp-page docs"><div className="wp-tablecard glass"><SkeletonRows n={3} /></div></div></>;
+  if (mode.kind === "build" && !prop && build?.kind === "proposal") return <><TopBar><a {...linkProps("/proposals")}>Proposals</a></TopBar><div className="wp-page docs"><EmptyState icon="quote" title="This is a proposal." body="Proposals open from Proposals, where they're sent and answered." actions={<ButtonLink to="/proposals">All proposals</ButtonLink>} /></div></>;
   if (mode.kind === "build" && build === null) return <><TopBar><a {...linkProps("/sign")}>Docs</a></TopBar><div className="wp-page docs"><EmptyState icon="document" title="This document doesn't exist." actions={<ButtonLink to="/sign/docs">All docs</ButtonLink>} /></div></>;
 
   const st = doc.style;
@@ -310,7 +344,7 @@ export default function Builder({ mode }: { mode: Mode }) {
   const dragNodes = (e: React.DragEvent, nodes: PNode[]) => startInsertDrag(e, nodes);
 
   const assets = () => ({ fonts: fontRows, files: files as Record<string, string | null> });
-  const render = async () => { const { renderPdf } = await import("./pdf"); return renderPdf(doc, assets(), build?.document?.label); };
+  const render = async () => { const { renderPdf } = await import("./pdf"); return renderPdf(doc, assets(), prop ? prop.number : build?.document?.label); };
   const onPreview = async () => {
     setBusy("preview");
     try { const blob = await render(); setPreview(URL.createObjectURL(blob)); }
@@ -330,8 +364,45 @@ export default function Builder({ mode }: { mode: Mode }) {
   };
   const onUseTemplate = async () => {
     setBusy("use");
-    try { const id = await createBuild({ templateId: (mode as { templateId: Id<"wsTemplates"> }).templateId }); navigate(`/sign/b/${id}`); }
-    catch (e) { show(errText(e)); setBusy(null); }
+    const templateId = (mode as { templateId: Id<"wsTemplates"> }).templateId;
+    try {
+      if (isProp) { const id = await createProposal({ templateId }); navigate(`/proposals/${id}`); }
+      else { const id = await createBuild({ templateId }); navigate(`/sign/b/${id}`); }
+    } catch (e) { show(errText(e)); setBusy(null); }
+  };
+  // Proposals: Send checks the proposal first (Details lists what's missing), then asks (717:4509).
+  const onAskSend = () => {
+    const p = proposalProblems(doc);
+    if (p.length) { setProblems(p); setTab("details"); if (phone) setSheet(true); show(p[0]); return; }
+    setProblems(null); setSending(true);
+  };
+  const onSend = async (message: string, move: boolean) => {
+    if (!prop) return;
+    try {
+      // Always save first (review fix): the server checks and freezes the saved copy, so it must match the PDF.
+      const sent = doc;
+      await saveBuild({ buildId: prop.buildId, title: sent.title, blocks: sent.page, fields: sent.fields, signers: sent.signers, style: sent.style });
+      if (docRef.current === sent) setDirty(false);
+      const blob = await render();
+      const storageId = await uploadToStorage(await uploadUrl({}), new File([blob], `${prop.number} ${doc.title}.pdf`, { type: "application/pdf" }));
+      const r = await sendProposal({ proposalId: prop._id, storageId, message: message.trim() || undefined, move });
+      setSending(false);
+      show(r.held ? "Saved as sent, but the email was held (email sending is limited on this site)." : `Sent to ${doc.fields.client.name.split(" ")[0] || doc.fields.client.email}`);
+    } catch (e) { show(errText(e)); }
+  };
+  const onResend = async () => {
+    if (!prop) return;
+    setBusy("resend");
+    try { const r = await sendProposal({ proposalId: prop._id, resend: true }); show(r.held ? "The email was held (email sending is limited on this site)." : "Sent the email again"); } catch (e) { show(errText(e)); } finally { setBusy(null); }
+  };
+  const onCopy = async () => {
+    if (!prop) return;
+    setBusy("copy");
+    try { const id = await copyProposal({ proposalId: prop._id }); navigate(`/proposals/${id}`); } catch (e) { show(errText(e)); setBusy(null); }
+  };
+  const onStartContract = async () => {
+    if (!prop) return;
+    try { const id = await startContract({ proposalId: prop._id }); navigate(`/sign/b/${id}`); } catch (e) { show(errText(e)); }
   };
   const goTo = (pos: number) => {
     if (!editor) return;
@@ -349,16 +420,24 @@ export default function Builder({ mode }: { mode: Mode }) {
           <button className="icon-btn sm" aria-label="Undo" title={`Undo (${mac ? "⌘Z" : "Ctrl+Z"})`} disabled={!hist.current.past.length} onClick={() => step("undo")}><Icon name="arrow-left" size={18} /></button>
           <button className="icon-btn sm" aria-label="Redo" title={`Redo (${mac ? "⇧⌘Z" : "Ctrl+Shift+Z"})`} disabled={!hist.current.future.length} onClick={() => step("redo")}><Icon name="arrow-right" size={18} /></button>
         </span>
-        <span className={`ws-save hide-sm ${saveState}`}>{saveState === "saving" ? <><Spinner /> Saving</> : saveState === "error" ? <><Icon name="alert" size={14} /> Not saved</> : <><Icon name="check" size={14} plain /> Saved</>}</span>
+        {locked ? <span className="ws-save hide-sm saved"><Icon name="lock" size={14} /> Locked · {P_CHIP[prop!.status]?.text.toLowerCase()}</span>
+          : <span className={`ws-save hide-sm ${saveState}`}>{saveState === "saving" ? <><Spinner /> Saving</> : saveState === "error" ? <><Icon name="alert" size={14} /> Not saved</> : <><Icon name="check" size={14} plain /> Saved</>}</span>}
+        {prop && <span className="hide-sm"><ProposalChip status={prop.status} /></span>}
         <Button variant="ghost" size="sm" className="hide-sm" loading={busy === "preview"} onClick={() => void onPreview()} iconEnd="external">Preview PDF</Button>
-        {mode.kind === "build" ? <>
+        {prop ? <>
+          {!locked && <Button variant="ghost" size="sm" className="hide-sm" onClick={() => setAsTemplate(true)}>Save as proposal template</Button>}
+          {!locked ? <Button variant="primary" size="sm" disabled={prop.status === "waiting"} title={prop.status === "waiting" ? "Claude is still drafting it" : undefined} onClick={onAskSend}>Send</Button>
+            : prop.status === "accepted" ? (prop.contract ? <ButtonLink variant="secondary" size="sm" to={`/sign/b/${prop.contract._id}`}>Open the contract</ButtonLink> : <Button variant="primary" size="sm" onClick={() => setContracting(true)}>Start the contract</Button>)
+            : prop.status === "sent" ? <Button variant="secondary" size="sm" loading={busy === "resend"} onClick={() => void onResend()}>Send again</Button>
+            : <Button variant="secondary" size="sm" loading={busy === "copy"} onClick={() => void onCopy()}>Make a copy</Button>}
+        </> : mode.kind === "build" ? <>
           <Button variant="ghost" size="sm" className="hide-sm" onClick={() => setAsTemplate(true)} iconEnd="chevron-right">Save as template</Button>
           <Button variant="primary" size="sm" loading={busy === "continue"} disabled={!!sent} onClick={() => void onContinue()} title={sent ? "It's out for signature or signed" : undefined}>{build?.document ? "Update the PDF" : "Continue to signing"}</Button>
-        </> : <Button variant="primary" size="sm" loading={busy === "use"} onClick={() => void onUseTemplate()}>New document from this</Button>}
+        </> : <Button variant="primary" size="sm" loading={busy === "use"} onClick={() => void onUseTemplate()}>{isProp ? "New proposal from this" : "New document from this"}</Button>}
       </>}>
-        <a {...linkProps("/sign")}>Docs</a><Sep />
-        {mode.kind === "template" ? <><a {...linkProps("/sign/templates")}>Templates</a><Sep /></> : null}
-        <span className="here">{mode.kind === "template" ? meta.name || doc.title : doc.title}{build?.document ? ` · ${build.document.label}` : ""}</span>
+        {isProp ? <><a {...linkProps("/proposals")}>Proposals</a><Sep /></> : <><a {...linkProps("/sign")}>Docs</a><Sep /></>}
+        {mode.kind === "template" ? <><a {...linkProps(isProp ? "/proposals/templates" : "/sign/templates")}>Templates</a><Sep /></> : null}
+        <span className="here">{mode.kind === "template" ? meta.name || doc.title : doc.title}{prop ? ` · ${prop.number}` : build?.document ? ` · ${build.document.label}` : ""}</span>
       </TopBar>
 
       <div className="content wsb" style={{ ["--wsb-backdrop" as string]: st.backdrop, ...(st.backdropImage && files[st.backdropImage.fileId] ? { ["--wsb-backdrop-img" as string]: `url(${files[st.backdropImage.fileId]})` } : {}) }}>
@@ -370,6 +449,8 @@ export default function Builder({ mode }: { mode: Mode }) {
 
         {/* The page */}
         <div className="wsb-stage" ref={stageRef}>
+          {prop && <ProposalBanner p={prop} busy={busy} onDismiss={() => void dismissDrafted({ proposalId: prop._id }).catch((e) => show(errText(e)))} onContract={() => setContracting(true)} onLater={() => void proposalLater({ proposalId: prop._id, what: "contract" }).catch((e) => show(errText(e)))}
+            onWithdraw={async () => { try { await withdrawProposal({ proposalId: prop._id }); show("Withdrawn. The link now says so."); } catch (e) { show(errText(e)); } }} onCopy={() => void onCopy()} />}
           {sent && <div className="wp-notice ws-banner"><Icon name="lock" size={20} /><span className="txt">{build!.document!.label} is {build!.document!.status === "sent" ? "out for signature" : "signed"}. Changes here won't reach it; cancel it first to send a new version.</span></div>}
           <div className={`wsb-page${picking ? " wsb-picking" : ""}`}
             // Select mode: a tap ticks the block under it; nothing else on the page reacts (no typing, no fields).
@@ -411,14 +492,15 @@ export default function Builder({ mode }: { mode: Mode }) {
           {tab === "insert" && (
             <div className="wsb-pane">
               <span className="wsb-hint">{phone ? "Tap to add after the cursor, or press and hold to drag onto the page" : "Drag onto the page (or into a container), or click to add after the cursor"}</span>
-              {INSERT.map((x) => <button key={x.kind} className="wsb-insert" draggable onDragStart={(e) => dragNodes(e, newNodes(x.kind))} onDragEnd={() => endInsertDrag(editor)} {...touch.item(() => newNodes(x.kind), INSERT_LABEL[x.kind])} onClick={() => { if (touch.justDropped()) return; if (editor) insertKind(editor, x.kind); if (phone) setSheet(false); }}>{x.icon}<span><b>{INSERT_LABEL[x.kind]}</b><span className="secondary">{x.hint}</span></span></button>)}
-              <ClauseLibrary clauses={clauses} onInsert={(c) => { if (touch.justDropped()) return; if (editor) insertNodes(editor, [clauseSection(c)]); if (phone) setSheet(false); }} onDragStart={(e, c) => dragNodes(e, [clauseSection(c)])} onDragEnd={() => endInsertDrag(editor)} touchProps={(c) => touch.item(() => [clauseSection(c)], c.title)} />
+              {INSERT.filter((x) => !isProp || (x.kind !== "parties" && x.kind !== "signatures")).map((x) => <button key={x.kind} className="wsb-insert" draggable onDragStart={(e) => dragNodes(e, newNodes(x.kind))} onDragEnd={() => endInsertDrag(editor)} {...touch.item(() => newNodes(x.kind), INSERT_LABEL[x.kind])} onClick={() => { if (touch.justDropped()) return; if (editor) insertKind(editor, x.kind); if (phone) setSheet(false); }}>{x.icon}<span><b>{INSERT_LABEL[x.kind]}</b><span className="secondary">{x.hint}</span></span></button>)}
+              {prop && <PitchDeck p={prop} show={show} />}
+              {!isProp && <ClauseLibrary clauses={clauses} onInsert={(c) => { if (touch.justDropped()) return; if (editor) insertNodes(editor, [clauseSection(c)]); if (phone) setSheet(false); }} onDragStart={(e, c) => dragNodes(e, [clauseSection(c)])} onDragEnd={() => endInsertDrag(editor)} touchProps={(c) => touch.item(() => [clauseSection(c)], c.title)} />}
             </div>
           )}
           {tab === "format" && <FormatPanel editor={editor} accent={st.accent} onSaveClause={(sec) => void onSaveClause(sec)} />}
           {tab === "style" && <StylePanel style={st} onChange={(s) => setDoc((d) => ({ ...d, style: s }))} fonts={fontRows} files={files as Record<string, string | null>} show={show} />}
           {tab === "details" && (
-            <DetailsPane doc={doc} setDoc={setDoc} extraKeys={extraKeys} mode={mode.kind} meta={meta} setMeta={(m) => { setMeta(m); setDirty(true); }} total={t} problems={problems ?? (mode.kind === "build" ? buildProblems(doc) : [])} show={show} />
+            <DetailsPane doc={doc} setDoc={setDoc} extraKeys={isProp ? [] : extraKeys} mode={mode.kind} proposal={isProp} meta={meta} setMeta={(m) => { setMeta(m); setDirty(true); }} total={t} problems={problems ?? (mode.kind === "build" ? (isProp ? (locked ? [] : proposalProblems(doc)) : buildProblems(doc)) : [])} show={show} />
           )}
         </aside>
       </div>
@@ -459,15 +541,17 @@ export default function Builder({ mode }: { mode: Mode }) {
       {preview && (
         <Modal onClose={() => { URL.revokeObjectURL(preview); setPreview(null); }} label="PDF preview" width={900}>
           <div className="wsb-preview">
-            <div className="dhead"><h2 className="headline">Preview <span className="rest">Exactly what will be signed (the signature spots are invisible markers).</span></h2><button className="icon-btn" onClick={() => { URL.revokeObjectURL(preview); setPreview(null); }} aria-label="Close"><X size={18} /></button></div>
+            <div className="dhead"><h2 className="headline">Preview <span className="rest">{isProp ? (locked ? "This page now; the client has the PDF that was sent." : "Exactly what the client will read.") : "Exactly what will be signed (the signature spots are invisible markers)."}</span></h2><button className="icon-btn" onClick={() => { URL.revokeObjectURL(preview); setPreview(null); }} aria-label="Close"><X size={18} /></button></div>
             <iframe title="PDF preview" src={preview} />
             <a className="btn ghost sm" href={preview} download={`${doc.title}.pdf`}>Download this preview</a>
           </div>
         </Modal>
       )}
-      {asTemplate && <SaveTemplate doc={doc} onClose={() => setAsTemplate(false)} onSave={async (name, description) => {
-        try { await saveAsTemplate({ name, description, title: doc.title, blocks: doc.page, fields: doc.fields, signers: [], style: doc.style }); setAsTemplate(false); show(`Saved as the template "${name}"`); } catch (e) { show(errText(e)); }
+      {asTemplate && <SaveTemplate doc={doc} proposal={isProp} onClose={() => setAsTemplate(false)} onSave={async (name, description) => {
+        try { await saveAsTemplate({ name, description, title: doc.title, blocks: doc.page, fields: doc.fields, signers: [], style: doc.style, ...(isProp ? { kind: "proposal" as const } : {}) }); setAsTemplate(false); show(`Saved as the ${isProp ? "proposal " : ""}template "${name}"`); } catch (e) { show(errText(e)); }
       }} />}
+      {sending && prop && <SendProposal p={prop} doc={doc} onClose={() => setSending(false)} onSend={onSend} />}
+      {contracting && prop && <StartContract p={prop} doc={doc} onClose={() => setContracting(false)} onStart={onStartContract} />}
       {tdrag && <>
         {tdrag.line && <div className="wsb-tdragline" style={{ top: tdrag.line.top - 2, left: tdrag.line.left, width: tdrag.line.width }} />}
         <div className="wsb-tdrag" style={{ left: tdrag.x, top: tdrag.y }}>{tdrag.label}</div>
@@ -493,8 +577,8 @@ function ClauseLibrary({ clauses, onInsert, onDragStart, onDragEnd, touchProps }
 }
 
 
-function DetailsPane({ doc, setDoc, extraKeys, mode, meta, setMeta, total, problems, show }: {
-  doc: BuildDoc; setDoc: (f: (d: BuildDoc) => BuildDoc) => void; extraKeys: string[]; mode: "build" | "template"; meta: Meta; setMeta: (m: Meta) => void;
+function DetailsPane({ doc, setDoc, extraKeys, mode, proposal, meta, setMeta, total, problems, show }: {
+  doc: BuildDoc; setDoc: (f: (d: BuildDoc) => BuildDoc) => void; extraKeys: string[]; mode: "build" | "template"; proposal: boolean; meta: Meta; setMeta: (m: Meta) => void;
   total: ReturnType<typeof totals>; problems: string[]; show: (m: string) => void;
 }) {
   const saveProfile = useMutation(api.builder.saveProfile);
@@ -511,10 +595,10 @@ function DetailsPane({ doc, setDoc, extraKeys, mode, meta, setMeta, total, probl
         {input("Description", meta.description, (v) => setMeta({ ...meta, description: v }))}
         <p className="caption secondary">Client details are filled in on each document made from this template.</p>
       </> : <>
-        {input("Document title", doc.title, (v) => setDoc((d) => ({ ...d, title: v })))}
+        {input(proposal ? "Proposal title" : "Document title", doc.title, (v) => setDoc((d) => ({ ...d, title: v })))}
         <span className="label">Client</span>
-        {input("Name (signs as the client)", f.client.name, (v) => setClient("name", v))}
-        {input("Email (the signing link goes here)", f.client.email, (v) => setClient("email", v), "email")}
+        {input(proposal ? "Name (who it's for)" : "Name (signs as the client)", f.client.name, (v) => setClient("name", v))}
+        {input(proposal ? "Email (the proposal link goes here)" : "Email (the signing link goes here)", f.client.email, (v) => setClient("email", v), "email")}
         {input("Company", f.client.company, (v) => setClient("company", v))}
         {input("Phone", f.client.phone, (v) => setClient("phone", v))}
         {input("Address", f.client.address, (v) => setClient("address", v))}
@@ -539,7 +623,7 @@ function DetailsPane({ doc, setDoc, extraKeys, mode, meta, setMeta, total, probl
       <div className="field"><span className="ws-flabel">Fill-in fields (click to copy)</span><div className="wsb-fields">
         {[...FIELD_HELP, ...f.custom.filter((c) => c.key).map((c) => ({ key: c.key, label: c.key }))].map((x) => <button key={x.key} className="chip" onClick={() => { void navigator.clipboard.writeText(`{${x.key}}`); show(`Copied {${x.key}}`); }} title={x.label}>{`{${x.key}}`}</button>)}
       </div></div>
-      {mode === "build" && <div className="wsb-totals"><span>Total <b>{money(total.total)}</b></span>{total.depositPct > 0 && <span>Deposit <b>{money(total.deposit)}</b>{total.invoiceDeposit ? " → Stripe draft" : ""}</span>}</div>}
+      {mode === "build" && <div className="wsb-totals"><span>{proposal ? "Investment" : "Total"} <b>{money(total.total)}</b></span>{total.depositPct > 0 && <span>{proposal ? "Deposit to book" : "Deposit"} <b>{money(total.deposit)}</b>{total.invoiceDeposit && !proposal ? " → Stripe draft" : ""}</span>}</div>}
       <span className="label">Your business</span>
       {input("Legal name", f.business.legalName, (v) => setBiz("legalName", v))}
       {input("Doing business as", f.business.name, (v) => setBiz("name", v))}
@@ -553,15 +637,15 @@ function DetailsPane({ doc, setDoc, extraKeys, mode, meta, setMeta, total, probl
   );
 }
 
-function SaveTemplate({ doc, onClose, onSave }: { doc: BuildDoc; onClose: () => void; onSave: (name: string, description: string) => Promise<void> }) {
+function SaveTemplate({ doc, proposal, onClose, onSave }: { doc: BuildDoc; proposal?: boolean; onClose: () => void; onSave: (name: string, description: string) => Promise<void> }) {
   const [name, setName] = useState(doc.title);
   const [desc, setDesc] = useState("");
   const [busy, setBusy] = useState(false);
   return (
     <Modal onClose={onClose} label="Save as template" width={460}>
       <div style={{ display: "grid", gap: 12 }}>
-        <h2 className="headline">Save as a template</h2>
-        <p className="caption secondary">The page, fields and style are saved; the client's details aren't.</p>
+        <h2 className="headline">{proposal ? "Save as a proposal template" : "Save as a template"}</h2>
+        <p className="caption secondary">{proposal ? "The sections, wording and style are saved; the client's details and the prices aren't (they come from Settings › Pricing each time)." : "The page, fields and style are saved; the client's details aren't."}</p>
         <label className="field"><span className="ws-flabel">Name</span><input className="input sm" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span className="ws-flabel">Description (optional)</span><input className="input sm" value={desc} onChange={(e) => setDesc(e.target.value)} /></label>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!name.trim() || busy} onClick={async () => { setBusy(true); await onSave(name, desc); setBusy(false); }}>{busy ? <Spinner /> : <LayoutTemplate size={15} />}Save template</button></div>
@@ -570,3 +654,144 @@ function SaveTemplate({ doc, onClose, onSave }: { doc: BuildDoc; onClose: () => 
   );
 }
 
+
+// ---------- Phase 3b: the proposal's banner and dialogs ----------
+
+function ProposalBanner({ p, busy, onContract, onLater, onWithdraw, onCopy, onDismiss }: { p: ProposalInfo; busy: string | null; onContract: () => void; onLater: () => void; onWithdraw: () => void; onCopy: () => void; onDismiss: () => void }) {
+  const r = p.response;
+  if (P_OPEN.has(p.status) && p.drafted === "claude") return (
+    <div className="wp-notice warn pr-banner">
+      <Icon name="note" size={20} />
+      <span className="txt"><b>Drafted by Claude: review before sending</b><span>Claude wrote this from the questionnaire answers. Check every section and every price before you send it.</span></span>
+      <button type="button" className="btn ghost sm" onClick={onDismiss}>Dismiss</button>
+    </div>
+  );
+  if (p.status === "accepted" && r) return (
+    <div className="wp-notice pr-banner ok">
+      <Icon name="check-circle" size={20} />
+      <span className="txt"><b>Accepted by {r.name} · {longWhen(r.at)}</b>
+        <span>{p.contract ? "The contract draft is in Docs. Nothing has been sent." : "Start the contract? It makes a Service Agreement draft in Docs from this proposal. Nothing is sent."}</span></span>
+      {p.contract ? <ButtonLink size="sm" variant="secondary" to={`/sign/b/${p.contract._id}`}>Open the contract</ButtonLink> : <>
+        {!p.asked.contract && <button type="button" className="btn ghost sm" onClick={onLater}>Not now</button>}
+        <Button size="sm" variant="primary" onClick={onContract}>Start the contract</Button>
+      </>}
+    </div>
+  );
+  if (p.status === "declined" && r) return (
+    <div className="wp-notice pr-banner">
+      <Icon name="info" size={20} />
+      <span className="txt"><b>Declined by {r.name} · {longWhen(r.at)}</b><span>{r.reason ? `"${r.reason}"` : "No reason given."}</span></span>
+      <Button size="sm" variant="secondary" loading={busy === "copy"} onClick={onCopy}>Make a copy to change</Button>
+    </div>
+  );
+  if (p.status === "sent") return (
+    <div className="wp-notice pr-banner">
+      <Icon name="send" size={20} />
+      <span className="txt"><b>Sent to {p.who.name} · {p.sentAt ? longDay(p.sentAt) : ""}{p.viewedAt ? ` · viewed ${longDay(p.viewedAt)}` : ""}</b>
+        <span>Locked: {p.who.name.split(" ")[0] || "the client"} is reading the PDF that was sent. To change it, withdraw it or make a copy.</span></span>
+      {p.link && <button type="button" className="btn ghost sm" onClick={() => void navigator.clipboard?.writeText(p.link!)}>Copy link</button>}
+      <button type="button" className="btn ghost sm" onClick={onWithdraw}>Withdraw</button>
+      <Button size="sm" variant="secondary" loading={busy === "copy"} onClick={onCopy}>Make a copy</Button>
+    </div>
+  );
+  if (p.status === "void") return (
+    <div className="wp-notice pr-banner">
+      <Icon name="info" size={20} />
+      <span className="txt"><b>Withdrawn{p.voidedAt ? ` · ${longDay(p.voidedAt)}` : ""}</b><span>The link says it was withdrawn. Make a copy to change it and send it again.</span></span>
+      <Button size="sm" variant="secondary" loading={busy === "copy"} onClick={onCopy}>Make a copy</Button>
+    </div>
+  );
+  return null;
+}
+
+function SendProposal({ p, doc, onClose, onSend }: { p: ProposalInfo; doc: BuildDoc; onClose: () => void; onSend: (message: string, move: boolean) => Promise<void> }) {
+  const c = doc.fields.client;
+  const first = c.name.trim().split(" ")[0] || "the client";
+  const [message, setMessage] = useState("");
+  const [move, setMove] = useState(false); // D84: unticked; nothing moves on its own
+  const [busy, setBusy] = useState(false);
+  const company = c.company.trim() || c.name.trim();
+  return (
+    <Modal onClose={onClose} label="Send the proposal" width={560}>
+      <div className="crm-dialog">
+        <DialogHeader eyebrow={`Send · ${p.number}`} title={`Send the proposal to ${first}?`} body={`${first} gets an email with a link to read it and press Accept. No account needed.`} onClose={onClose} />
+        <div className="wp-field"><span className="wp-field-label">To</span><div className="pr-to"><Icon name="mail" size={16} />{c.name.trim()} · {c.email.trim()}</div></div>
+        <TextArea label="Message (optional)" rows={3} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={`e.g. Hi ${first}, here's our plan. Happy to talk it through.`} />
+        <hr className="wp-divider" />
+        <Checkbox checked={move} onChange={setMove} label={`Also move ${company} to Quoted in your pipeline`} hint="Only if you tick this. Nothing moves on its own." />
+        <div className="dfoot">
+          <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
+          <Button variant="primary" loading={busy} onClick={async () => { setBusy(true); await onSend(message, move); setBusy(false); }}>Send proposal</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function StartContract({ p, doc, onClose, onStart }: { p: ProposalInfo; doc: BuildDoc; onClose: () => void; onStart: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const r = p.response;
+  const usd = (c: number) => `$${(c / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return (
+    <Modal onClose={onClose} label="Start the contract" width={560}>
+      <div className="crm-dialog">
+        <DialogHeader eyebrow={`Accepted · ${p.number}`} title="Start the contract?" body={`${r?.name ?? p.who.name} accepted the proposal${r ? ` on ${longDay(r.at).replace(/, \d{4}$/, "")}` : ""}. Make a Service Agreement draft in Docs from it? Nothing is sent.`} onClose={onClose} />
+        <span className="wp-eyebrow pr-carries">Carries over</span>
+        <dl className="crm-dl pr-dl">
+          <dt>Client</dt><dd>{[p.who.company, p.who.name].filter(Boolean).join(" · ")}</dd>
+          <dt>Project</dt><dd>{doc.fields.project || doc.title}</dd>
+          <dt>Line items</dt><dd>{p.money.lines} line{p.money.lines === 1 ? "" : "s"} · {usd(p.money.totalCents)}</dd>
+          <dt>Deposit</dt><dd>{p.money.depositPct ? `${p.money.depositPct}% · sets the Stripe draft` : "None"}</dd>
+        </dl>
+        <div className="dfoot">
+          <button className="btn ghost" type="button" onClick={onClose}>Not now</button>
+          <Button variant="primary" loading={busy} onClick={async () => { setBusy(true); await onStart(); setBusy(false); }}>Start the contract draft</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** The Insert panel's Pitch deck part (716:4980) and its dialog (717:4428, D72): Claude makes a Claude Slides deck on
+ *  the owner's own computer through the Sign connector, in the business's brand kit or the client's. */
+function PitchDeck({ p, show }: { p: ProposalInfo; show: (m: string) => void }) {
+  const setDeck = useMutation(api.proposals.setDeck);
+  const [open, setOpen] = useState(false);
+  const kit = p.deck?.kit ?? (p.client ? "client" : "business");
+  const company = p.who.company || p.client?.name || "";
+  const poss = company ? `${company}${/s$/i.test(company) ? "'" : "'s"}` : "the client's";
+  const whose = kit === "client" ? `${poss} brand kit` : "your brand kit (Settings › Brand kit)";
+  const phrase = `Make a pitch deck for proposal ${p.number} in Wrangler Portal`;
+  const [note, setNote] = useState(p.deck?.note ?? "");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="pr-deck">
+      <span className="wp-eyebrow">Pitch deck</span>
+      <span className="wsb-hint">Brand kit for the deck</span>
+      <span className="pr-kitseg" role="group" aria-label="Brand kit for the deck">
+        {(["business", "client"] as const).map((k) => <button key={k} type="button" aria-pressed={kit === k} onClick={() => void setDeck({ proposalId: p._id, kit: k }).catch((e) => show(errText(e)))}>{k === "business" ? "Business" : "Client"}</button>)}
+      </span>
+      <span className="wsb-hint">Uses {whose}.</span>
+      <button type="button" className="btn pr-deckbtn" onClick={() => setOpen(true)}>Make a pitch deck</button>
+      <span className="wsb-hint">Claude makes a Claude Slides deck on your computer from this proposal. It exports to PowerPoint or PDF.</span>
+      {open && (
+        <Modal onClose={() => setOpen(false)} label="Make a pitch deck" width={560}>
+          <div className="crm-dialog">
+            <DialogHeader eyebrow={`Pitch deck · ${p.number}`} title="Make a pitch deck." body={`Claude makes a Claude Slides deck on your computer, from this proposal, in ${whose}. It exports to PowerPoint or PDF. Say this in your Claude app:`} onClose={() => setOpen(false)} />
+            <div className="qz-phrase"><span>“{phrase}”</span><button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(phrase).then(() => show("Copied"), () => show("Couldn't copy"))}>Copy</button></div>
+            <span className="wp-eyebrow pr-carries">Claude gets</span>
+            <ul className="pr-gets">
+              <li><Icon name="check" size={14} plain />The proposal: every section and the investment</li>
+              <li><Icon name="check" size={14} plain />{kit === "client" ? poss.replace(/^the/, "The") : "Your"} brand kit: logo, colours, fonts, files, links, tone words</li>
+              <li><Icon name="check" size={14} plain />Your note below, if you add one</li>
+            </ul>
+            <TextArea label="A note for Claude (optional)" rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Keep it to 8 slides. Lead with last year's recap." />
+            <div className="dfoot">
+              <Button variant="primary" loading={busy} onClick={async () => { setBusy(true); try { await setDeck({ proposalId: p._id, kit, note, asked: true }); setOpen(false); } catch (e) { show(errText(e)); } finally { setBusy(false); } }}>Done</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}

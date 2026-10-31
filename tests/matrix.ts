@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 export const modules = import.meta.glob("../convex/**/*.ts");
 
-export type Ids = { requestId: Id<"wsRequests">; buildId: Id<"wsBuilds">; templateId: Id<"wsTemplates">; clauseId: Id<"wsClauses">; styleId: Id<"wsStyles">; docId: Id<"wsDocuments">; wsVersionId: Id<"wsVersions">; projectId: Id<"projects">; videoId: Id<"videos">; shareId: Id<"shares">; replyId: Id<"replies">; versionId: Id<"versions">; noteId: Id<"notes">; fileId: Id<"dropFiles">; inviteId: Id<"invites">; keyId: Id<"connectorKeys">; storageId: Id<"_storage">; clientRecId: Id<"clients">; personId: Id<"clientPeople">; inboxItemId: Id<"inboxItems">; inboxNoteId: Id<"inboxNotes">; deliveryFileId: Id<"deliveryFiles">; invoiceId: Id<"invoices">; planId: Id<"plans">; subscriptionId: Id<"subscriptions">; dealId: Id<"deals">; followUpId: Id<"followUps">; estimateId: Id<"estimates">; entryId: Id<"ledgerEntries"> };
+export type Ids = { requestId: Id<"wsRequests">; buildId: Id<"wsBuilds">; templateId: Id<"wsTemplates">; clauseId: Id<"wsClauses">; styleId: Id<"wsStyles">; docId: Id<"wsDocuments">; wsVersionId: Id<"wsVersions">; projectId: Id<"projects">; videoId: Id<"videos">; shareId: Id<"shares">; replyId: Id<"replies">; versionId: Id<"versions">; noteId: Id<"notes">; fileId: Id<"dropFiles">; inviteId: Id<"invites">; keyId: Id<"connectorKeys">; storageId: Id<"_storage">; clientRecId: Id<"clients">; personId: Id<"clientPeople">; inboxItemId: Id<"inboxItems">; inboxNoteId: Id<"inboxNotes">; deliveryFileId: Id<"deliveryFiles">; invoiceId: Id<"invoices">; planId: Id<"plans">; subscriptionId: Id<"subscriptions">; dealId: Id<"deals">; followUpId: Id<"followUps">; estimateId: Id<"estimates">; entryId: Id<"ledgerEntries">; quoteId: Id<"quotes">; proposalId: Id<"proposals"> };
 
 // Minimal valid arguments for each function, so the access check (not argument validation) is what refuses.
 export function argsFor(ids: Ids): Record<string, Record<string, unknown>> {
@@ -92,6 +92,19 @@ export function argsFor(ids: Ids): Record<string, Record<string, unknown>> {
     "subscriptions.changePreview": { subscriptionId: ids.subscriptionId, planId: ids.planId }, "subscriptions.changePlan": { subscriptionId: ids.subscriptionId, planId: ids.planId },
     "subscriptions.pause": { subscriptionId: ids.subscriptionId }, "subscriptions.resume": { subscriptionId: ids.subscriptionId }, "subscriptions.cancel": { subscriptionId: ids.subscriptionId, when: "now" },
     "subscriptions.setFailRule": { rule: "cancel" }, "subscriptions.setClientFailRule": { clientId: ids.clientRecId, rule: "cancel" }, "subscriptions.failRules": {},
+    "quotes.list": {}, "quotes.get": { quoteId: "nope" }, "quotes.options": {}, "quotes.save": { who: { name: "M", email: "m@x.example" }, title: "T", lines: [], deposit: { kind: "percent", value: 25 } },
+    "quotes.deleteDraft": { quoteId: ids.quoteId }, "quotes.send": { quoteId: ids.quoteId }, "quotes.voidQuote": { quoteId: ids.quoteId }, "quotes.answerMove": { quoteId: ids.quoteId, yes: false },
+    "quotes.later": { quoteId: ids.quoteId, what: "seen" }, "quotes.draftFrom": { quoteId: ids.quoteId, contract: true },
+    "quotes.page": { token: "x".repeat(24) }, "quotes.markViewed": { token: "x".repeat(24) },
+    "proposals.list": {}, "proposals.get": { proposalId: "nope" }, "proposals.create": {}, "proposals.copy": { proposalId: ids.proposalId }, "proposals.deleteDraft": { proposalId: ids.proposalId },
+    "proposals.templates": {}, "proposals.newTemplate": {}, "proposals.send": { proposalId: ids.proposalId }, "proposals.withdraw": { proposalId: ids.proposalId },
+    "proposals.later": { proposalId: ids.proposalId, what: "seen" }, "proposals.startContract": { proposalId: ids.proposalId },
+    "proposals.page": { token: "x".repeat(24) }, "proposals.markViewed": { token: "x".repeat(24) },
+    "proposals.questionnaire": {}, "proposals.saveQuestionnaire": { questionnaire: {} }, "proposals.resetQuestionnaire": {}, "proposals.startQuestionnaire": {},
+    "proposals.saveAnswers": { proposalId: ids.proposalId, answers: {} }, "proposals.answerUploadUrl": {}, "proposals.addAnswerFile": { proposalId: ids.proposalId, storageId: ids.storageId, name: "f" },
+    "proposals.fileUrls": { proposalId: ids.proposalId }, "proposals.finish": { proposalId: ids.proposalId, how: "self" }, "proposals.fillInstead": { proposalId: ids.proposalId },
+    "proposals.dismissDrafted": { proposalId: ids.proposalId }, "proposals.forCompany": { clientId: ids.clientRecId }, "proposals.setDeck": { proposalId: ids.proposalId, kit: "business" },
+    "brandKit.get": {}, "brandKit.save": { colors: [], fonts: {}, links: [], tone: [] }, "brandKit.uploadUrl": {}, "brandKit.addFile": { storageId: ids.storageId, name: "x.pdf" }, "brandKit.removeFile": { fileId: ids.storageId },
     "crm.rates": {}, "crm.saveRates": { rates: {} }, "crm.board": {}, "crm.addDeal": { title: "X" }, "crm.moveDeal": { dealId: ids.dealId, stage: "quoted" }, "crm.closeDeal": { dealId: ids.dealId },
     "crm.deal": { dealId: "nope" }, "crm.companies": {}, "crm.company": { clientId: "nope" }, "crm.contact": { personId: "nope" }, "crm.followUps": {},
     "crm.addFollowUp": { who: "A", about: "B", due: "2030-01-01" }, "crm.doneFollowUp": { followUpId: ids.followUpId }, "crm.getEstimate": { estimateId: "nope" },
@@ -156,7 +169,9 @@ export async function setup() {
     const followUpId = await ctx.db.insert("followUps", { who: "A", about: "B", due: "2030-01-01", createdAt: 0 });
     const estimateId = await ctx.db.insert("estimates", { title: "E", scope: "", input: {}, rates: {}, result: { lines: [] }, createdAt: 0, updatedAt: 0 });
     const entryId = await ctx.db.insert("ledgerEntries", { projectId, kind: "hours", hours: 1, date: "2030-01-01", createdAt: 0 });
-    return { dealId, followUpId, estimateId, entryId, subscriptionId, planId, invoiceId, deliveryFileId, clientRecId, personId, inboxItemId, inboxNoteId, requestId, buildId, templateId, clauseId, styleId, docId, wsVersionId, wsKeyId, projectId, videoId, versionId, noteId, fileId, inviteId, keyId, storageId, shareId, replyId, ownerSub: await sess(owner), strangerSub: await sess(stranger), clientSub: await sess(client) };
+    const quoteId = await ctx.db.insert("quotes", { number: "X-Q-0001", seq: 1, status: "draft", contact: { name: "A", email: "a@b.co" }, title: "T", lines: [], deposit: { kind: "percent", value: 25 }, validUntil: "2030-01-01", totalCents: 0, history: [], createdAt: 0, updatedAt: 0 });
+    const proposalId = await ctx.db.insert("proposals", { buildId, number: "X-P-0001", seq: 1, status: "draft", history: [], createdAt: 0, updatedAt: 0 });
+    return { proposalId, quoteId, dealId, followUpId, estimateId, entryId, subscriptionId, planId, invoiceId, deliveryFileId, clientRecId, personId, inboxItemId, inboxNoteId, requestId, buildId, templateId, clauseId, styleId, docId, wsVersionId, wsKeyId, projectId, videoId, versionId, noteId, fileId, inviteId, keyId, storageId, shareId, replyId, ownerSub: await sess(owner), strangerSub: await sess(stranger), clientSub: await sess(client) };
   });
   return { t, ids };
 }

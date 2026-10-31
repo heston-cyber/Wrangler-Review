@@ -404,6 +404,7 @@ export default defineSchema({
     rounds: v.optional(v.number()),          // Phase 2: rounds per video for this client's projects (missing: the business's)
     watermarkOff: v.optional(v.boolean()),   // Phase 2 (D24): review copies are watermarked unless switched off here
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))), // Phase 2b (D64): overrides the business's choice
+    brandKit: v.optional(v.any()),           // Phase 3b (D71): the company's brand kit (convex/brandKit.ts)
   }).index("by_name", ["name"]).index("by_dropbox_folder", ["dropboxFolder"]),
 
   // Playback problems the browser reported (Oct 21), so they can be diagnosed on devices Claude can't reach.
@@ -480,6 +481,7 @@ export default defineSchema({
     style: v.any(),
     signers: v.any(),                       // client signers (name, email, title) for when it's sent
     templateId: v.optional(v.id("wsTemplates")),
+    kind: v.optional(v.literal("proposal")),  // Phase 3b: a proposal (Proposals), never a contract; kept out of Docs
     documentId: v.optional(v.id("wsDocuments")), // set once it has gone to signing
     renderedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -489,6 +491,7 @@ export default defineSchema({
     businessId: v.optional(v.id("businesses")), // Phase 0.5d step 2; required from step 3
     name: v.string(),
     description: v.optional(v.string()),
+    kind: v.optional(v.literal("proposal")),  // Phase 3b: a proposal template, kept apart from contract templates
     blocks: v.any(),
     fields: v.any(),
     style: v.any(),
@@ -713,6 +716,10 @@ export default defineSchema({
     })),
     // Phase 3: Settings › Estimate rates (lib/estimate.ts Rates). Missing: Wrangler's from me-wrangler § 4, others empty.
     estimateRates: v.optional(v.any()),
+    brandKit: v.optional(v.any()),           // Phase 3b (D71): Settings › Brand kit (convex/brandKit.ts)
+    quoteSeq: v.optional(v.number()),        // Phase 3b: the last quote number used (D74)
+    proposalSeq: v.optional(v.number()),     // Phase 3b: the last proposal number used (D85)
+    questionnaire: v.optional(v.any()),      // Phase 3b (D70): the business's own proposal questionnaire (lib/questionnaire.ts)
     // Phase 2b (D64): when Stripe's last retry of a subscription payment fails: keep it past due (default) or cancel it.
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))),
     // Phase 2 Part B step 4 (D51): automatic invoice reminders, off until the owner turns them on (that's their OK).
@@ -780,6 +787,89 @@ export default defineSchema({
     createdBy: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_client", ["clientId"]).index("by_deal", ["dealId"]),
+
+  // Phase 3b (Oct 31): Quick quotes (Payments › Quotes). A quote has its own number (WRNGLR-Q-0001, D74), lines like an
+  // invoice's, a deposit and a valid-until date. Sent, it gets a long random token: the client's page at /q/<token>
+  // (no account, D81) where they accept or decline, recorded with name, time, IP and device. Nothing converts or moves
+  // on its own (D84): the owner answers each prompt.
+  quotes: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    number: v.string(),
+    seq: v.number(),
+    status: v.union(v.literal("draft"), v.literal("sent"), v.literal("accepted"), v.literal("declined"), v.literal("void")),
+    clientId: v.optional(v.id("clients")),
+    dealId: v.optional(v.id("deals")),
+    projectId: v.optional(v.id("projects")),
+    contact: v.object({ name: v.string(), email: v.string(), company: v.optional(v.string()) }),
+    title: v.string(),
+    lines: v.array(v.object({ id: v.string(), description: v.string(), qty: v.number(), unitCents: v.number(), suggestedCents: v.optional(v.number()), note: v.optional(v.string()) })),
+    discountCents: v.optional(v.number()),
+    taxPercent: v.optional(v.number()),
+    deposit: v.object({ kind: v.union(v.literal("percent"), v.literal("amount")), value: v.number() }),
+    validUntil: v.string(),                       // yyyy-mm-dd
+    terms: v.optional(v.string()),
+    questions: v.optional(v.any()),               // the quick questions' answers (what's the job, days, level)
+    totalCents: v.number(),
+    token: v.optional(v.string()),
+    sentAt: v.optional(v.number()),
+    viewedAt: v.optional(v.number()),
+    response: v.optional(v.object({ kind: v.union(v.literal("accepted"), v.literal("declined")), name: v.string(), reason: v.optional(v.string()), at: v.number(), ip: v.optional(v.string()), userAgent: v.optional(v.string()) })),
+    asked: v.optional(v.object({ move: v.optional(v.union(v.literal("yes"), v.literal("no"))), draft: v.optional(v.union(v.literal("done"), v.literal("later"))), seen: v.optional(v.boolean()) })),
+    made: v.optional(v.object({ buildId: v.optional(v.id("wsBuilds")), invoiceId: v.optional(v.id("invoices")) })),
+    voidedAt: v.optional(v.number()),
+    history: v.array(v.object({ kind: v.string(), at: v.number(), by: v.optional(v.string()), detail: v.optional(v.string()) })),
+    createdBy: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_token", ["token"]).index("by_client", ["clientId"]).index("by_deal", ["dealId"]).index("by_updated", ["updatedAt"]),
+
+  // Phase 3b · Proposals (D69): a written pitch made in the builder (its wsBuilds row, kind "proposal"), numbered
+  // {prefix}-P-0001 (D85). Sending freezes the PDF, the contact and the totals; the client reads it at /p/<token> and
+  // accepts or declines (D73, D86), recorded like quotes. Nothing moves or converts on its own (D84).
+  proposals: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    buildId: v.id("wsBuilds"),
+    number: v.string(),
+    seq: v.number(),
+    status: v.union(v.literal("draft"), v.literal("waiting"), v.literal("ready"), v.literal("sent"), v.literal("accepted"), v.literal("declined"), v.literal("void")),
+    templateId: v.optional(v.id("wsTemplates")),
+    clientId: v.optional(v.id("clients")),
+    dealId: v.optional(v.id("deals")),
+    contact: v.optional(v.object({ name: v.string(), email: v.string(), company: v.optional(v.string()) })), // frozen when sent
+    fromName: v.optional(v.string()),            // who replies go to (the business contact), frozen when sent
+    totalCents: v.optional(v.number()),          // frozen when sent
+    depositCents: v.optional(v.number()),
+    depositPct: v.optional(v.number()),
+    lineCount: v.optional(v.number()),
+    pdfId: v.optional(v.id("_storage")),         // the PDF as sent
+    message: v.optional(v.string()),
+    drafted: v.optional(v.literal("claude")),    // Claude wrote the draft through the connector (the review banner)
+    source: v.optional(v.union(v.literal("template"), v.literal("blank"), v.literal("questionnaire"), v.literal("copy"))),
+    filling: v.optional(v.boolean()),            // the questionnaire is still being answered
+    answers: v.optional(v.any()),                // the questionnaire's answers, by question id (and __lines, the priced lines)
+    qStep: v.optional(v.number()),               // the step they were on ("Save and finish later")
+    deck: v.optional(v.object({ kit: v.union(v.literal("business"), v.literal("client")), note: v.optional(v.string()), askedAt: v.optional(v.number()) })), // D72
+    token: v.optional(v.string()),
+    sentAt: v.optional(v.number()),
+    viewedAt: v.optional(v.number()),
+    response: v.optional(v.object({ kind: v.union(v.literal("accepted"), v.literal("declined")), name: v.string(), reason: v.optional(v.string()), at: v.number(), ip: v.optional(v.string()), userAgent: v.optional(v.string()) })),
+    asked: v.optional(v.object({ move: v.optional(v.union(v.literal("yes"), v.literal("no"))), contract: v.optional(v.union(v.literal("done"), v.literal("later"))), seen: v.optional(v.boolean()) })),
+    made: v.optional(v.object({ buildId: v.optional(v.id("wsBuilds")) })),
+    voidedAt: v.optional(v.number()),
+    history: v.array(v.object({ kind: v.string(), at: v.number(), by: v.optional(v.string()), detail: v.optional(v.string()) })),
+    createdBy: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_token", ["token"]).index("by_build", ["buildId"]).index("by_client", ["clientId"]).index("by_deal", ["dealId"]).index("by_updated", ["updatedAt"]),
+
+  // Phase 3b (review fix): the files uploaded for a proposal's questionnaire answers. Only these are served or copied.
+  proposalFiles: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    proposalId: v.id("proposals"),
+    storageId: v.id("_storage"),
+    name: v.string(), size: v.number(), type: v.string(),
+    createdAt: v.number(),
+  }).index("by_proposal", ["proposalId"]).index("by_storage", ["storageId"]),
 
   // The job ledger (a project tab): hours and costs logged against the project, compared with its estimate.
   ledgerEntries: defineTable({

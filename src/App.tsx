@@ -46,7 +46,20 @@ const ClientSubscription = lazy(() => import("./modules/payments/ClientSubscript
 const ClientSubscriptions = lazy(() => import("./modules/payments/ClientSubscription").then((m) => ({ default: m.ClientSubscriptions })));
 const PlanEditor = lazy(() => import("./modules/payments/PlansPage").then((m) => ({ default: m.PlanEditor })));
 const ClientInvoice = lazy(() => import("./modules/payments/ClientInvoice"));
+// Phase 3b: Quick quotes (Payments › Quotes) and the no-account quote page /q/<token> (D81).
+const QuotesPage = lazy(() => import("./modules/payments/Quotes"));
+const QuoteEditor = lazy(() => import("./modules/payments/Quotes").then((m) => ({ default: m.QuoteEditor })));
+const QuoteDetail = lazy(() => import("./modules/payments/Quotes").then((m) => ({ default: m.QuoteDetail })));
+const ClientQuote = lazy(() => import("./modules/payments/ClientQuote"));
 const ClientInvoices = lazy(() => import("./modules/payments/ClientInvoices"));
+// Phase 3b: Proposals (D69) in their own chunk with the builder, and the no-account proposal page /p/<token> (D73).
+const ProposalsPage = lazy(() => import("./modules/proposals/Proposals"));
+const NewProposal = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.NewProposal })));
+const ProposalTemplates = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalTemplates })));
+const ProposalBuilder = lazy(() => import("./modules/proposals/Proposals").then((m) => ({ default: m.ProposalBuilder })));
+const ClientProposal = lazy(() => import("./modules/proposals/ClientProposal"));
+const QuestionnaireEditor = lazy(() => import("./modules/proposals/Questionnaire").then((m) => ({ default: m.QuestionnaireEditor })));
+const QuestionnaireRunner = lazy(() => import("./modules/proposals/Questionnaire").then((m) => ({ default: m.QuestionnaireRunner })));
 // Wrangler Sign (S1): its own chunk, so pdf.js only loads on those pages.
 const SignHome = lazy(() => import("./modules/docs/pages/SignHome"));
 const SignDocs = lazy(() => import("./modules/docs/pages/SignDocs"));
@@ -111,6 +124,12 @@ export default function App() {
     const page = (inShell: boolean) => <Suspense fallback={<Loading />}><ClientSubscription key={subLink[1]} token={subLink[1]} inShell={inShell} /></Suspense>;
     return isAuthenticated ? <ShareForMember video={false} page={page} /> : page(false);
   }
+  // Phase 3b: a quote link (email 18's "View and accept"), no account needed; the same page signed in or out.
+  const quoteLink = /^\/q\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
+  if (quoteLink) return <Suspense fallback={<Loading />}><ClientQuote key={quoteLink[1]} token={quoteLink[1]} /></Suspense>;
+  // Phase 3b: a proposal link (email 19's "View proposal"), no account needed; the same page signed in or out.
+  const proposalLink = /^\/p\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
+  if (proposalLink) return <Suspense fallback={<Loading />}><ClientProposal key={proposalLink[1]} token={proposalLink[1]} /></Suspense>;
   // An invoice link (Part B step 3, the "View and pay" button in email 08) works signed in or out too.
   const invoice = /^\/i\/([A-Za-z0-9_-]{16,64})\/?$/.exec(path);
   if (invoice) {
@@ -162,6 +181,9 @@ function SignedIn() {
   else if (/^\/payments\/subscriptions\/?$/.test(path)) page = <Suspense fallback={<Loading />}><SubscriptionsPage /></Suspense>;
   else if (/^\/payments\/subscriptions\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><StartSubscription key={search} clientId={params.get("client")} /></Suspense>;
   else if (/^\/payments\/subscriptions\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><SubscriptionDetail key={id} subscriptionId={id} /></Suspense>; }
+  else if (/^\/payments\/quotes\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuotesPage /></Suspense>;
+  else if (/^\/payments\/quotes\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuoteEditor key={search} clientId={params.get("client")} dealId={params.get("deal")} /></Suspense>;
+  else if (/^\/payments\/quotes\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><QuoteDetail key={id} quoteId={id} /></Suspense>; }
   else if (/^\/payments\/plans\/?$/.test(path)) page = <Suspense fallback={<Loading />}><PlansPage /></Suspense>;
   else if (/^\/payments\/plans\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><PlanEditor key="new" /></Suspense>;
   else if (/^\/payments\/plans\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><PlanEditor key={id} planId={id} /></Suspense>; }
@@ -174,6 +196,14 @@ function SignedIn() {
   else if (/^\/sign\/templates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3] as Id<"wsTemplates">; page = <Suspense fallback={<Loading />}><Builder key={id} mode={{ kind: "template", templateId: id }} /></Suspense>; }
   else if (/^\/sign\/templates\/?$/.test(path)) page = <Suspense fallback={<Loading />}><SignTemplates /></Suspense>;
   else if (path.startsWith("/sign")) page = <Suspense fallback={<Loading />}><SignHome /></Suspense>;
+  else if (/^\/proposals\/?$/.test(path)) page = <Suspense fallback={<Loading />}><ProposalsPage /></Suspense>;
+  else if (/^\/proposals\/new\/?$/.test(path)) page = <Suspense fallback={<Loading />}><NewProposal key={search} clientId={params.get("client")} dealId={params.get("deal")} /></Suspense>;
+  else if (/^\/proposals\/questionnaire\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuestionnaireEditor /></Suspense>;
+  else if (/^\/proposals\/questionnaire\/preview\/?$/.test(path)) page = <Suspense fallback={<Loading />}><QuestionnaireRunner key="preview" preview /></Suspense>;
+  else if (/^\/proposals\/[^/]+\/questions\/?$/.test(path)) { const id = path.split("/")[2]; page = <Suspense fallback={<Loading />}><QuestionnaireRunner key={id} proposalId={id} /></Suspense>; }
+  else if (/^\/proposals\/templates\/?$/.test(path)) page = <Suspense fallback={<Loading />}><ProposalTemplates /></Suspense>;
+  else if (/^\/proposals\/templates\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3] as Id<"wsTemplates">; page = <Suspense fallback={<Loading />}><Builder key={id} mode={{ kind: "template", templateId: id, proposal: true }} /></Suspense>; }
+  else if (/^\/proposals\/[^/]+\/?$/.test(path)) { const id = path.split("/")[2]; page = <Suspense fallback={<Loading />}><ProposalBuilder key={id} proposalId={id} /></Suspense>; }
   else if (/^\/clients\/pipeline\/?$/.test(path)) page = <Suspense fallback={<Loading />}><Pipeline /></Suspense>;
   else if (/^\/clients\/follow-ups\/?$/.test(path)) page = <Suspense fallback={<Loading />}><FollowUps /></Suspense>;
   else if (/^\/clients\/deals\/[^/]+\/?$/.test(path)) { const id = path.split("/")[3]; page = <Suspense fallback={<Loading />}><DealPage key={id} dealId={id} /></Suspense>; }
@@ -184,7 +214,7 @@ function SignedIn() {
   else if (/^\/sent\/?$/.test(path)) page = <SentPage />;
   else if (sentNote && sentNote[1] !== "new") page = <SentNote key={sentNote[1]} noteId={sentNote[1] as Id<"inboxNotes">} sent={Number(params.get("sent")) || null} />;
   else if (/^\/sent\/new\/?$/.test(path)) page = <PostNote key={params.get("note") ?? "new"} noteId={(params.get("note") as Id<"inboxNotes"> | null) ?? null} clientId={(params.get("client") as Id<"clients"> | null) ?? null} />;
-  else if (clientRec) { const t = params.get("tab"); page = <ClientPage key={clientRec[1]} clientId={clientRec[1] as Id<"clients">} tab={(["projects", "shared", "documents", "inbox", "settings"].includes(t ?? "") ? t : "overview") as ClientTab} />; }
+  else if (clientRec) { const t = params.get("tab"); page = <ClientPage key={clientRec[1]} clientId={clientRec[1] as Id<"clients">} tab={(["projects", "shared", "documents", "inbox", "brand", "settings"].includes(t ?? "") ? t : "overview") as ClientTab} />; }
   else if (path.startsWith("/activity")) page = <ActivityPage />;
   else if (path.startsWith("/register")) page = <Settings me={me} />; // now Settings › Register
   else if (path.startsWith("/settings")) page = <Settings me={me} />;

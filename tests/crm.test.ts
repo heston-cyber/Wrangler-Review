@@ -199,3 +199,24 @@ describe("review fixes (Oct 31)", () => {
     expect(after).toMatchObject({ billedCents: 480_000, paidCents: 480_000 });
   });
 });
+
+describe("Phase 3b step 1: brand kits", () => {
+  test("the owner saves the business's and a company's kit; limits hold (D90); clients and other businesses can't", async () => {
+    const w = await world();
+    await w.heston.mutation(api.brandKit.save, { colors: [{ hex: "#e10600" }], fonts: { heading: "Anton" }, links: [{ url: "instagram.com/wranglerproductions" }], tone: ["Cinematic", "Warm", "Warm"] });
+    expect(await w.heston.query(api.brandKit.get, {})).toMatchObject({ kind: "business", colors: [{ hex: "#E10600" }], fonts: { heading: "Anton" }, links: [{ label: "Instagram" }], tone: ["Cinematic", "Warm"] });
+    await w.heston.mutation(api.brandKit.save, { clientId: w.harbor, colors: [{ hex: "#3B2A20" }], fonts: {}, links: [], tone: ["Community"] });
+    expect(await w.heston.query(api.brandKit.get, { clientId: w.harbor })).toMatchObject({ kind: "company", name: "Harbor Coffee", tone: ["Community"] });
+    await expect(w.heston.mutation(api.brandKit.save, { colors: [{ hex: "red" }], fonts: {}, links: [], tone: [] })).rejects.toThrow(/colour/);
+    // A 26 MB upload is refused and deleted; a small one is kept.
+    const big = await w.t.run((ctx) => ctx.storage.store(new Blob([new Uint8Array(26 * 1024 * 1024)], { type: "application/pdf" })));
+    expect((await w.heston.mutation(api.brandKit.addFile, { storageId: big, name: "huge.pdf" })).error).toMatch(/25 MB/);
+    expect(await w.t.run((ctx) => ctx.storage.getUrl(big))).toBeNull();
+    const small = await w.t.run((ctx) => ctx.storage.store(new Blob(["%PDF"], { type: "application/pdf" })));
+    expect((await w.heston.mutation(api.brandKit.addFile, { storageId: small, name: "guide.pdf" })).error).toBeNull();
+    expect((await w.heston.query(api.brandKit.get, {})).files).toEqual([expect.objectContaining({ name: "guide.pdf" })]);
+    await expect(w.maya.query(api.brandKit.get, {})).rejects.toThrow();
+    await expect(w.boss.query(api.brandKit.get, { clientId: w.harbor })).rejects.toThrow();
+    await expect(w.boss.mutation(api.brandKit.save, { clientId: w.harbor, colors: [], fonts: {}, links: [], tone: [] })).rejects.toThrow();
+  });
+});

@@ -25,3 +25,22 @@ describe("T3.3 estimate (me-wrangler § 4)", () => {
     expect(ratesProblems(chained)).toContain("A linked kind can't be the base of another link (no chains).");
   });
 });
+
+describe("Phase 3b pricing: discounts (D88) and the custom formula (D77)", () => {
+  test("a multi-day discount comes off the price and the split; the formula matches the rates; bad formulas say why", async () => {
+    const { estimate, formulaPrice, ratesProblems, WRANGLER_RATES } = await import("../convex/lib/estimate");
+    const r = { ...WRANGLER_RATES, discounts: [{ id: "md", name: "Multi-day shoot", kind: "percent" as const, value: 10, qty: "shooting.days", min: 3 }] };
+    const four = estimate(r, { base: { shooting: 32 } });
+    expect(four).toMatchObject({ subtotalCents: 1_920_000, discounts: [{ id: "md", cents: 192_000 }], priceCents: 1_728_000, expenseCents: 976_000, netCents: 752_000, reserveCents: 188_000 });
+    expect(estimate(r, { base: { shooting: 16 } }).discounts).toBeUndefined(); // 2 days: condition not met
+    expect(estimate(WRANGLER_RATES, { base: { shooting: 32 } }).priceCents).toBe(1_920_000); // no discounts: T3.3 unchanged
+    const f = { ...WRANGLER_RATES, formula: { on: true, text: "Shooting rate × shoot hours + Editing rate × edit hours + Travel day × travel days" } };
+    expect(formulaPrice(f, estimate(f, { base: { shooting: 32 }, travelOver: true, travelDays: 1 }))).toBe(1_987_500);
+    const fd = { ...r, formula: { on: true, text: "(Shooting rate * shoot hours + editing rate * edit hours) - multi-day shoot" } };
+    expect(formulaPrice(fd, estimate(fd, { base: { shooting: 32 } }))).toBe(1_728_000);
+    expect(formulaPrice({ ...f, formula: { on: true, text: "Shooting rate × drone hours" } }, four)).toMatch(/drone hours/);
+    expect(formulaPrice({ ...f, formula: { on: true, text: "(Shooting rate × 2" } }, four)).toMatch(/bracket/);
+    expect(ratesProblems({ ...f, formula: { on: true, text: "process.exit()" } })[0]).toMatch(/Custom formula/);
+    expect(ratesProblems(r)).toEqual([]);
+  });
+});

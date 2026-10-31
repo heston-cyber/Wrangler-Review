@@ -3,16 +3,24 @@
 // added to the client's price), links that set one kind's hours from one base kind × a level (D53: one base each, no
 // chains), day lengths (D55), a travel rule (D54) and the profit split. Wrangler's values are me-wrangler § 4.
 // All money is in cents.
+import { evaluate } from "./formula";
 
 export type Kind = { id: string; name: string; unit: "hour" | "day"; clientCents: number };
 export type Cost = { id: string; name: string; kindId: string; cents: number };
 export type Level = { id: string; name: string; mult: number };
 export type Link = { id: string; target: string; base: string; levels: Level[]; defaultLevel: string };
+/** Phase 3b (D77): a discount, suggested when its condition is met (e.g. shoot days at least 3). "percent" comes off
+ *  the subtotal; "amount" is a fixed number of cents. `qty` is a quantity key (see quantityNames). */
+export type Discount = { id: string; name: string; kind: "percent" | "amount"; value: number; qty: string; min: number };
 export type Rates = {
   kinds: Kind[]; costs: Cost[]; links: Link[];
   fullDayHours: number; halfDayHours: number;
   travel: { on: boolean; thresholdHours: number; kindId: string };
   reservePct: number;
+  // Phase 3b · Settings › Pricing (D76, D77, D88). Optional so rates saved before Phase 3b still read.
+  defaults?: { hourlyCents: number; dailyCents: number }; // for lines that aren't one of the kinds of work
+  discounts?: Discount[];                                    // apply everywhere, estimates included (D88)
+  formula?: { on: boolean; text: string };                   // quotes and proposals suggest this instead
 };
 
 /** me-wrangler § 4 (written by Heston, Oct 26). */
@@ -45,6 +53,20 @@ export const EMPTY_RATES: Rates = { kinds: [], costs: [], links: [], fullDayHour
 /** What's wrong with a set of rates (empty when they're usable). */
 export function ratesProblems(r: Rates): string[] {
   const out: string[] = [];
+  if (r.defaults && (!(r.defaults.hourlyCents >= 0) || !(r.defaults.dailyCents >= 0))) out.push("Default rates must be $0 or more.");
+  const qty = new Set(quantityNames(r).map((x) => x.key));
+  for (const d of r.discounts ?? []) {
+    if (!d.name.trim()) out.push("Every discount needs a name.");
+    if (d.kind === "percent" && !(d.value >= 0 && d.value <= 100)) out.push(`${d.name || "A discount"}: the percent must be between 0 and 100.`);
+    if (d.kind === "amount" && !(Number.isInteger(d.value) && d.value >= 0)) out.push(`${d.name || "A discount"}: the amount must be $0 or more.`);
+    if (!qty.has(d.qty)) out.push(`${d.name || "A discount"}: pick what it depends on.`);
+    if (!(d.min >= 0)) out.push(`${d.name || "A discount"}: the condition must be 0 or more.`);
+  }
+  if (r.formula?.on) {
+    const k = primaryKind(r);
+    const v = k ? formulaPrice(r, estimate(r, { base: { [k.id]: 4 * r.fullDayHours } })) : "Add a kind of work billed per hour first.";
+    if (typeof v === "string") out.push(`Custom formula: ${v}`);
+  }
   const ids = new Set(r.kinds.map((k) => k.id));
   if (new Set(r.kinds.map((k) => k.name.trim().toLowerCase())).size !== r.kinds.length) out.push("Two kinds of work have the same name.");
   for (const k of r.kinds) {
@@ -91,6 +113,8 @@ export type EstimateInput = {
 export type Line = { kindId: string; name: string; unit: "hour" | "day"; qty: number; clientCents: number; costCents: number };
 export type Estimate = {
   lines: Line[];          // every kind with a quantity
+  subtotalCents?: number; // before discounts (Phase 3b)
+  discounts?: Array<{ id: string; name: string; cents: number }>; // discounts whose condition is met (D88)
   priceCents: number;
   expenseCents: number;
   expenses: Array<{ kindId: string; name: string; cents: number }>;
@@ -119,16 +143,76 @@ export function estimate(r: Rates, input: EstimateInput): Estimate {
     const costCents = r.costs.filter((c) => c.kindId === k.id).reduce((t, c) => t + Math.round(q * c.cents), 0);
     lines.push({ kindId: k.id, name: k.name, unit: k.unit, qty: q, clientCents: Math.round(q * k.clientCents), costCents });
   }
-  const priceCents = lines.reduce((t, l) => t + l.clientCents, 0);
+  const subtotalCents = lines.reduce((t, l) => t + l.clientCents, 0);
+  // D88: discounts whose condition is met come off the price (and so off profit and the split).
+  const q = quantities(r, qty);
+  const discounts = (r.discounts ?? []).filter((d) => (q.get(d.qty) ?? 0) >= d.min && d.value > 0).map((d) => ({
+    id: d.id, name: d.name, cents: d.kind === "percent" ? Math.round((subtotalCents * d.value) / 100) : Math.round(d.value),
+  }));
+  const priceCents = Math.max(0, subtotalCents - discounts.reduce((t, d) => t + d.cents, 0));
   const expenses = lines.map((l) => ({ kindId: l.kindId, name: l.name, cents: l.costCents }));
   const expenseCents = expenses.reduce((t, e) => t + e.cents, 0);
   const netCents = priceCents - expenseCents;
   const reserveCents = Math.round((netCents * r.reservePct) / 100);
-  return { lines, priceCents, expenseCents, expenses, netCents, reserveCents, ownerCents: netCents - reserveCents, travelDays };
+  return { lines, ...(discounts.length ? { subtotalCents, discounts } : {}), priceCents, expenseCents, expenses, netCents, reserveCents, ownerCents: netCents - reserveCents, travelDays };
 }
 
 /** The base kind of the first link (Wrangler: Shooting): the one whose time the owner types in. */
 export function primaryKind(r: Rates): Kind | null {
   const base = r.links[0]?.base;
   return r.kinds.find((k) => k.id === base) ?? r.kinds.find((k) => k.unit === "hour") ?? null;
+}
+
+// ---------- Phase 3b: quantities, discounts and the custom formula's names ----------
+
+/** "Shooting" → "Shoot", "Editing" → "Edit": the short word people use ("shoot days", "edit hours"). */
+const stem = (name: string) => { const n = name.trim(); return /ing$/i.test(n) && n.length > 5 ? n.slice(0, -3) : n; };
+
+/** The quantities a discount can depend on and a formula can use: hours and days of each hour kind, days of each
+ *  day kind. Keys are stable ids; names are what the owner reads and types. */
+export function quantityNames(r: Rates): Array<{ key: string; name: string; aliases: string[] }> {
+  const out: Array<{ key: string; name: string; aliases: string[] }> = [];
+  for (const k of r.kinds) {
+    if (k.unit === "hour") {
+      out.push({ key: `${k.id}.days`, name: `${stem(k.name)} days`, aliases: [`${k.name} days`] });
+      out.push({ key: `${k.id}.hours`, name: `${stem(k.name)} hours`, aliases: [`${k.name} hours`] });
+    } else {
+      const plural = /day$/i.test(k.name) ? `${k.name}s` : `${k.name} days`;
+      out.push({ key: `${k.id}.days`, name: plural, aliases: [] });
+    }
+  }
+  return out;
+}
+
+function quantities(r: Rates, qty: Map<string, number>) {
+  const m = new Map<string, number>();
+  for (const k of r.kinds) {
+    const v = qty.get(k.id) ?? 0;
+    if (k.unit === "hour") { m.set(`${k.id}.hours`, v); m.set(`${k.id}.days`, r.fullDayHours > 0 ? v / r.fullDayHours : 0); }
+    else m.set(`${k.id}.days`, v);
+  }
+  return m;
+}
+
+/** Every name a formula can use, with its value for this estimate: rates and discounts in dollars, quantities as
+ *  counts. Shown as chips under the formula box. */
+export function formulaNames(r: Rates, e?: Estimate): Array<{ name: string; value: number; aliases: string[] }> {
+  const qty = new Map<string, number>((e?.lines ?? []).map((l) => [l.kindId, l.qty]));
+  if (e) for (const k of r.kinds) if (!qty.has(k.id)) qty.set(k.id, 0);
+  const q = quantities(r, qty);
+  const out: Array<{ name: string; value: number; aliases: string[] }> = [];
+  if (r.defaults) { out.push({ name: "Hourly rate", value: r.defaults.hourlyCents / 100, aliases: [] }); out.push({ name: "Daily rate", value: r.defaults.dailyCents / 100, aliases: [] }); }
+  for (const k of r.kinds) out.push(k.unit === "hour" ? { name: `${k.name} rate`, value: k.clientCents / 100, aliases: [`${stem(k.name)} rate`] } : { name: k.name, value: k.clientCents / 100, aliases: [`${k.name} rate`] });
+  for (const n of quantityNames(r)) out.push({ name: n.name, value: q.get(n.key) ?? 0, aliases: n.aliases });
+  for (const d of r.discounts ?? []) out.push({ name: d.name, value: (e?.discounts?.find((x) => x.id === d.id)?.cents ?? 0) / 100, aliases: [] });
+  return out;
+}
+
+/** The custom formula's price for an estimate, in cents (or what's wrong with it). */
+export function formulaPrice(r: Rates, e: Estimate): number | string {
+  if (!r.formula?.text.trim()) return "The formula is empty.";
+  const names = new Map<string, number>();
+  for (const n of formulaNames(r, e)) for (const k of [n.name, ...n.aliases]) names.set(k.toLowerCase(), n.value);
+  const v = evaluate(r.formula.text, names);
+  return typeof v === "string" ? v : Math.round(v * 100);
 }

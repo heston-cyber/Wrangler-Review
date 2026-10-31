@@ -417,14 +417,11 @@ export const makeContract = action({
     if (existing && t.e.contractAt && t.e.contractAt >= t.e.updatedAt) return { buildId: existing._id };
     await ctx.runMutation(internal.crm.claimContract, { estimateId });
     try {
-      const result = t.e.result as { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }> };
+      const result = t.e.result as { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }>; discounts?: Array<{ name: string; cents: number }> };
       let buildId: Id<"wsBuilds">;
       if (existing) buildId = existing._id;
       else {
-        const templates = await ctx.runQuery(internal.builder.templatesInternal, {});
-        const tpl = templates.find((x) => /service agreement/i.test(x.name)) ?? null;
-        if (!tpl) throw new ConvexError("There's no template named \"Service Agreement\" yet (Docs › Templates).");
-        buildId = await ctx.runMutation(internal.builder.createBuildFor, { title: `${tpl.name} · ${t.company || t.e.title}`.slice(0, 120), page: tpl.page, templateId: tpl._id as Id<"wsTemplates"> });
+        buildId = await newAgreementDraft(ctx, t.company || t.e.title);
       }
       await fillContract(ctx, buildId, t, result, depositPercent);
       await ctx.runMutation(internal.crm.linkBuild, { estimateId, buildId });
@@ -437,15 +434,47 @@ export const makeContract = action({
 });
 
 type Target = { e: Doc<"estimates">; company: string; signer: { name: string; email: string } | null; project: string };
-async function fillContract(ctx: ActionCtx, buildId: Id<"wsBuilds">, t: Target, result: { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }> }, depositPercent: number) {
-    const b = (await ctx.runQuery(internal.builder.buildInternal, { buildId }))!;
-    const r = applyArgs(b.fields as Fields, (b.signers as never) ?? [], b.page, {
-      client: { name: t.signer?.name ?? "", email: t.signer?.email ?? "", company: t.company },
-      project: t.project, date: todayIso(),
-      line_items: result.lines.map((l) => ({ description: `${l.name}${l.unit === "hour" ? " (hours)" : " (days)"}`, qty: l.qty, rate: Math.round(l.clientCents / l.qty) / 100 })),
-      deposit_percent: Math.max(0, Math.min(100, depositPercent)),
-    });
-    await ctx.runMutation(internal.builder.patchBuild, { buildId, page: r.page, fields: r.fields, signers: r.signers });
+async function fillContract(ctx: ActionCtx, buildId: Id<"wsBuilds">, t: Target, result: { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }>; discounts?: Array<{ name: string; cents: number }> }, depositPercent: number) {
+  // D88: a discount is its own line, so the contract's total is the estimate's price.
+  await fillAgreement(ctx, buildId, { company: t.company, signer: t.signer, project: t.project, depositPercent, lines: [
+    ...result.lines.map((l) => ({ description: `${l.name}${l.unit === "hour" ? " (hours)" : " (days)"}`, qty: l.qty, rateCents: Math.round(l.clientCents / l.qty) })),
+    ...(result.discounts ?? []).map((d) => ({ description: `Discount: ${d.name}`, qty: 1, rateCents: -d.cents })),
+  ] });
+}
+
+/** Fills a Service Agreement draft's client, project, date, line items and deposit (estimates and quotes share it). */
+export async function fillAgreement(ctx: ActionCtx, buildId: Id<"wsBuilds">, d: { company: string; signer: { name: string; email: string } | null; project: string; depositPercent: number; lines: Array<{ description: string; qty: number; rateCents: number }> }) {
+  const b = (await ctx.runQuery(internal.builder.buildInternal, { buildId }))!;
+  const r = applyArgs(b.fields as Fields, (b.signers as never) ?? [], b.page, {
+    client: { name: d.signer?.name ?? "", email: d.signer?.email ?? "", company: d.company },
+    project: d.project, date: todayIso(),
+    line_items: d.lines.map((l) => ({ description: l.description.slice(0, 300), qty: l.qty, rate: l.rateCents / 100 })),
+    deposit_percent: Math.max(0, Math.min(100, d.depositPercent)),
+  });
+  await ctx.runMutation(internal.builder.patchBuild, { buildId, page: r.page, fields: r.fields, signers: r.signers });
+}
+
+/** A new draft from the business's "Service Agreement" template. */
+export async function newAgreementDraft(ctx: ActionCtx, title: string) {
+  const templates = await ctx.runQuery(internal.builder.templatesInternal, {});
+  const tpl = templates.find((x) => /service agreement/i.test(x.name)) ?? null;
+  if (!tpl) throw new ConvexError("There's no template named \"Service Agreement\" yet (Docs › Templates).");
+  return await ctx.runMutation(internal.builder.createBuildFor, { title: `${tpl.name} · ${title}`.slice(0, 120), page: tpl.page, templateId: tpl._id as Id<"wsTemplates"> });
+}
+
+/** Opens a pipeline card for a company or person (or finds its open one) and moves it forward to a stage, only when
+ *  the owner said yes (D84). Shared by quotes and proposals. */
+export async function moveCardFor(ctx: MutationCtx, d: { dealId?: Id<"deals"> | null; clientId?: Id<"clients"> | null; title: string; contactEmail?: string | null; projectId?: Id<"projects"> | null; valueCents?: number; stage: Stage; detail: string; by: string }) {
+  let deal = d.dealId ? await ctx.db.get(d.dealId) : null;
+  if (!deal && d.clientId) deal = (await ctx.db.query("deals").withIndex("by_client", (q) => q.eq("clientId", d.clientId!)).collect()).filter((x) => !x.closedAt).sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
+  const now = Date.now();
+  if (!deal) {
+    const id = await ctx.db.insert("deals", { title: d.title.slice(0, 160), ...(d.clientId ? { clientId: d.clientId } : {}), ...(d.contactEmail ? { contactEmail: d.contactEmail } : {}), ...(d.projectId ? { projectId: d.projectId } : {}),
+      ...(d.valueCents ? { valueCents: d.valueCents } : {}), stage: "lead", source: "hand", history: [{ kind: "created", at: now, by: d.by, detail: d.detail }], createdAt: now, updatedAt: now });
+    deal = (await ctx.db.get(id))!;
+  } else if (d.valueCents && !deal.valueCents) await ctx.db.patch(deal._id, { valueCents: d.valueCents });
+  await advanceDeal(ctx, (await ctx.db.get(deal._id))!, d.stage, d.detail);
+  return deal._id;
 }
 
 // ---------- the job ledger ----------

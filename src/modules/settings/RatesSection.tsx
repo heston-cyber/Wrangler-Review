@@ -1,4 +1,5 @@
-// Settings › Estimate rates (P3 / Owner / Settings · Estimate rates, 263:1382). How a business prices a job, built
+// Settings › Pricing (Phase 3b, D76: Estimate rates grown; P3b / Owner / Settings · Pricing 707:1178, 707:1774, 705:2;
+// first drawn as Settings › Estimate rates, 263:1382). Every card folds to one summary line. How a business prices a job, built
 // from general pieces: kinds of work (per hour or per day), subcontractor costs (expenses only, never added to the
 // client's price), links (D53: one kind's hours from one base kind × a level, no chains), day lengths (D55), the travel
 // rule (D54) and the profit split. Wrangler starts from me-wrangler § 4; other businesses start empty. Clients never
@@ -6,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { estimate, primaryKind, ratesProblems, type Cost, type Kind, type Link, type Rates } from "../../../convex/lib/estimate";
+import { estimate, formulaNames, formulaPrice, primaryKind, quantityNames, ratesProblems, type Cost, type Discount, type Kind, type Link, type Rates } from "../../../convex/lib/estimate";
 import { Button, Card, IconButton, SectionHead, Segmented, SkeletonRows, StatusChip, Toggle } from "../../ui/wp";
 import { Icon } from "../../ui/Icon";
 import { errText } from "../docs/pages/common";
@@ -22,6 +23,20 @@ function NumIn({ value, onChange, label, suffix, width = 140 }: { value: number;
   return <span className="rt-num" style={{ width }}><input className="input" inputMode="decimal" aria-label={label} value={t} onChange={(e) => { setT(e.target.value); onChange(num(e.target.value)); }} />{suffix && <span className="sfx">{suffix}</span>}</span>;
 }
 const Add = ({ children, onClick }: { children: React.ReactNode; onClick: () => void }) => <button type="button" className="rt-add" onClick={onClick}><Icon name="plus" size={14} />{children}</button>;
+/** A card that folds to one line (Section head · fold, 707:492): label, count and a summary when closed. */
+function Fold({ label, count, summary, children, defaultOpen = false }: { label: string; count?: number; summary?: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className={`wp-card glass rt fold${open ? " open" : ""}`} aria-label={label}>
+      <button type="button" className="rt-fold" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="wp-eyebrow">{label}</span>{count !== undefined && <span className="cnt">{count}</span>}
+        {!open && summary && <span className="sum">{summary}</span>}
+        <Icon name="chevron-down" size={16} className="chev" />
+      </button>
+      {open && <div className="rt-foldbody">{children}</div>}
+    </section>
+  );
+}
 const Remove = ({ label, onClick }: { label: string; onClick: () => void }) => <IconButton icon="close" label={label} bare iconSize={16} className="rt-x" onClick={onClick} />;
 
 export default function RatesSection({ show }: { show: (m: string) => void }) {
@@ -32,7 +47,7 @@ export default function RatesSection({ show }: { show: (m: string) => void }) {
   useEffect(() => { if (data && !r) setR(structuredClone(data.rates as Rates)); }, [data, r]);
   const problems = useMemo(() => (r ? ratesProblems(r) : []), [r]);
   const dirty = !!r && !!data && JSON.stringify(r) !== JSON.stringify(data.rates);
-  if (!data || !r) return <><SetHead eyebrow="Estimate rates" title="How you price a job." /><Card label="Loading"><SkeletonRows n={5} /></Card></>;
+  if (!data || !r) return <><SetHead eyebrow="Pricing" title="How you price a job." /><Card label="Loading"><SkeletonRows n={5} /></Card></>;
   const up = (p: Partial<Rates>) => setR({ ...r, ...p });
   const kind = (id: string) => r.kinds.find((k) => k.id === id);
   const setKind = (i: number, p: Partial<Kind>) => up({ kinds: r.kinds.map((k, j) => (j === i ? { ...k, ...p } : k)) });
@@ -44,17 +59,34 @@ export default function RatesSection({ show }: { show: (m: string) => void }) {
   const usable = !problems.length && k0;
   const check = usable ? estimate(r, { base: { [k0.id]: 4 * r.fullDayHours } }) : null;
   const travel = usable && r.travel.on ? estimate(r, { base: { [k0.id]: 4 * r.fullDayHours }, travelOver: true, travelDays: 1 }) : null;
+  const defaults = r.defaults ?? { hourlyCents: 0, dailyCents: 0 };
+  const discounts: Discount[] = r.discounts ?? [];
+  const setDisc = (i: number, p: Partial<Discount>) => up({ discounts: discounts.map((d, j) => (j === i ? { ...d, ...p } : d)) });
+  const qtyNames = quantityNames(r);
+  const formula = r.formula ?? { on: false, text: "" };
+  const fNames = formulaNames(r);
+  const fCheck = k0 && formula.text.trim() ? formulaPrice({ ...r, formula: { on: true, text: formula.text } }, estimate(r, { base: { [k0.id]: 4 * r.fullDayHours } })) : "";
   const link0 = r.links[0];
   const defLevel = link0?.levels.find((x) => x.id === link0.defaultLevel);
   const onSave = async () => {
     setBusy(true);
-    try { await save({ rates: r }); show("Rates saved. New estimates use them; saved estimates keep theirs."); } catch (e) { show(errText(e)); } finally { setBusy(false); }
+    try { await save({ rates: r }); show("Pricing saved. New estimates, quotes and proposals use it; saved ones keep theirs."); } catch (e) { show(errText(e)); } finally { setBusy(false); }
   };
   return (
     <>
-      <SetHead eyebrow="Estimate rates" title="How you price a job." sub="Estimates use these pieces. Clients never see costs, profit or the split." />
+      <SetHead eyebrow="Pricing" title="How you price a job." sub="Estimates, quotes and proposals suggest prices from these. You can type a different number on any of them. Clients never see costs, profit or the split." />
 
-      <Card className="rt" label="Kinds of work" head={<SectionHead label="Kinds of work" count={r.kinds.length} />}>
+      <Fold label="Default rates" summary={`Hourly ${money(defaults.hourlyCents)} · Daily ${money(defaults.dailyCents)}`.replace(/\.00/g, "")}>
+        <div className="rt-pad">
+          <div className="rt-two">
+            <div className="wp-field"><span className="wp-field-label">Hourly rate</span><MoneyInput label="Hourly rate" value={defaults.hourlyCents} onChange={(c) => up({ defaults: { ...defaults, hourlyCents: c } })} /></div>
+            <div className="wp-field"><span className="wp-field-label">Daily rate</span><MoneyInput label="Daily rate" value={defaults.dailyCents} onChange={(c) => up({ defaults: { ...defaults, dailyCents: c } })} /></div>
+          </div>
+          <p className="rt-note">Suggested for any line that isn't one of your kinds of work below.</p>
+        </div>
+      </Fold>
+
+      <Fold label="Rates by kind of work" count={r.kinds.length} summary={r.kinds.map((k) => k.name).filter(Boolean).join(" · ")}>
         <div className="rt-table">
           <div className="rt-h k"><span>Name</span><span>Billed</span><span>Client rate</span><span /></div>
           {r.kinds.map((k, i) => (
@@ -65,11 +97,11 @@ export default function RatesSection({ show }: { show: (m: string) => void }) {
               <Remove label={`Remove ${k.name}`} onClick={() => up({ kinds: r.kinds.filter((_, j) => j !== i) })} />
             </div>
           ))}
-          <Add onClick={() => up({ kinds: [...r.kinds, { id: newId(), name: "", unit: "hour", clientCents: 0 }] })}>Add kind of work</Add>
+          <Add onClick={() => up({ kinds: [...r.kinds, { id: newId(), name: "", unit: "hour", clientCents: 0 }] })}>Add rate</Add>
         </div>
-      </Card>
+      </Fold>
 
-      <Card className="rt" label="Subcontractor costs" head={<SectionHead label="Subcontractor costs" count={r.costs.length} />}>
+      <Fold label="Subcontractor costs" count={r.costs.length} summary={r.costs.map((c) => c.name).filter(Boolean).join(" · ")}>
         <p className="rt-note">What you pay out, per kind of work. Used for expenses and profit only; never added to the client's price.</p>
         <div className="rt-table">
           <div className="rt-h c"><span>Cost</span><span>For</span><span>Rate</span><span /></div>
@@ -86,9 +118,9 @@ export default function RatesSection({ show }: { show: (m: string) => void }) {
           ))}
           <Add onClick={() => up({ costs: [...r.costs, { id: newId(), name: "", kindId: r.kinds[0]?.id ?? "", cents: 0 }] })}>Add cost</Add>
         </div>
-      </Card>
+      </Fold>
 
-      <Card className="rt" label="Multipliers" head={<SectionHead label="Multipliers" count={r.links.reduce((t, l) => t + l.levels.length, 0)} />}>
+      <Fold label="Multipliers" count={r.links.reduce((t, l) => t + l.levels.length, 0)} summary={r.links.map((l) => `${kind(l.target)?.name ?? "?"} from ${(kind(l.base)?.name ?? "?").toLowerCase()} · ${l.levels.length} levels`).join(" · ")}>
         {r.links.map((l, i) => (
           <div key={l.id} className="rt-link">
             <span className="rt-sub">Link {i + 1} · {kind(l.target)?.name || "?"} from {kind(l.base)?.name || "?"}</span>
@@ -119,9 +151,9 @@ export default function RatesSection({ show }: { show: (m: string) => void }) {
           </div>
         ))}
         <div className="rt-table"><Add onClick={() => { const id = newId(); up({ links: [...r.links, { id: newId(), target: hourKinds[1]?.id ?? "", base: hourKinds[0]?.id ?? "", levels: [{ id, name: "Standard", mult: 1 }], defaultLevel: id }] }); }}>Add link</Add></div>
-      </Card>
+      </Fold>
 
-      <Card className="rt" label="Days and travel" head={<SectionHead label="Days and travel" />}>
+      <Fold label="Days and travel" summary={`${q(r.fullDayHours)} h day · ${q(r.halfDayHours)} h half day${r.travel.on ? ` · travel day after ${q(r.travel.thresholdHours)} h` : " · no travel rule"}`}>
         <div className="rt-pad">
           <div className="rt-two">
             <label className="wp-field"><span className="wp-field-label">Full day</span><NumIn label="Full day hours" value={r.fullDayHours} suffix="hours" width={9999} onChange={(v) => up({ fullDayHours: v })} /></label>
@@ -140,9 +172,35 @@ export default function RatesSection({ show }: { show: (m: string) => void }) {
             <p className="rt-note">On by default once the threshold is passed. Each estimate can waive it.</p>
           </>}
         </div>
-      </Card>
+      </Fold>
 
-      <Card className="rt" label="Profit split" head={<SectionHead label="Profit split" />}>
+      <Fold label="Discounts" count={discounts.length} summary={discounts.map((d) => d.name).filter(Boolean).join(" · ") || "None"}>
+        <div className="rt-table">
+          <div className="rt-h d"><span>Name</span><span>Amount</span><span>When</span><span /></div>
+          {discounts.map((d, i) => (
+            <div key={d.id} className="rt-row d">
+              <input className="input" aria-label="Discount name" value={d.name} onChange={(e) => setDisc(i, { name: e.target.value })} placeholder="Multi-day shoot" />
+              <span className="rt-amt">
+                <Segmented label={`${d.name || "Discount"} as`} value={d.kind} onChange={(k) => setDisc(i, { kind: k, value: 0 })} items={[{ key: "percent", label: "%" }, { key: "amount", label: "$" }]} />
+                {d.kind === "percent" ? <NumIn label={`${d.name} percent`} value={d.value} suffix="%" width={110} onChange={(v) => setDisc(i, { value: v })} />
+                  : <MoneyInput label={`${d.name} amount`} value={d.value} onChange={(c) => setDisc(i, { value: c })} />}
+              </span>
+              <span className="rt-when">
+                <select className="input" aria-label={`${d.name} depends on`} value={d.qty} onChange={(e) => setDisc(i, { qty: e.target.value })}>
+                  {qtyNames.map((x) => <option key={x.key} value={x.key}>{x.name}</option>)}
+                </select>
+                <span className="wp-small">at least</span>
+                <NumIn label={`${d.name} at least`} value={d.min} width={80} onChange={(v) => setDisc(i, { min: v })} />
+              </span>
+              <Remove label={`Remove ${d.name}`} onClick={() => up({ discounts: discounts.filter((_, j) => j !== i) })} />
+            </div>
+          ))}
+          <Add onClick={() => up({ discounts: [...discounts, { id: newId(), name: "", kind: "percent", value: 0, qty: qtyNames[0]?.key ?? "", min: 1 }] })}>Add discount</Add>
+          <p className="rt-note nopad">A discount is suggested on a quote or proposal when its condition is met, and comes off estimates too. You can remove it there. % comes off the subtotal; $ is a fixed amount.</p>
+        </div>
+      </Fold>
+
+      <Fold label="Profit split" summary={`${q(r.reservePct)}% reserve · ${q(100 - r.reservePct)}% owner`}>
         <div className="rt-pad">
           <div className="rt-two">
             <label className="wp-field"><span className="wp-field-label">Business reserve</span><NumIn label="Business reserve" value={r.reservePct} suffix="%" width={9999} onChange={(v) => up({ reservePct: v })} /></label>
@@ -150,12 +208,27 @@ export default function RatesSection({ show }: { show: (m: string) => void }) {
           </div>
           <p className="rt-note">Of net profit (price minus subcontractor costs). Must add up to 100%.</p>
         </div>
-      </Card>
+      </Fold>
+
+      <Fold label="Custom formula" summary={formula.on ? `On · ${typeof fCheck === "string" ? "needs a fix" : "works"}` : "Off"}>
+        <div className="rt-pad">
+          <div className="rt-toggle"><span><span className="wp-body">Use a custom formula</span><span className="wp-small">Optional. Write your own price using the names below, like a spreadsheet. When it's on, quotes and proposals suggest this instead of adding up the rates.</span></span>
+            <Toggle label="Use a custom formula" checked={formula.on} onChange={(on) => up({ formula: { ...formula, on } })} /></div>
+          <label className="wp-field"><span className="wp-field-label">Formula</span>
+            <textarea className="input rt-formula" rows={3} value={formula.text} spellCheck={false} onChange={(e) => up({ formula: { ...formula, text: e.target.value } })} placeholder="Shooting rate × shoot hours + Editing rate × edit hours − Multi-day shoot" /></label>
+          <span className="rt-sub nopad">Names you can use</span>
+          <div className="rt-chips">{fNames.map((n) => <button type="button" key={n.name} className="wp-tag rt-chip" onClick={() => up({ formula: { ...formula, text: `${formula.text}${formula.text && !/\s$/.test(formula.text) ? " " : ""}${n.name}` } })}>{n.name}</button>)}</div>
+          {formula.text.trim() && (typeof fCheck === "string"
+            ? <p className="rt-fcheck"><StatusChip tone="warning">Needs a fix</StatusChip><span>{fCheck}</span></p>
+            : <p className="rt-fcheck"><StatusChip tone="success">Works</StatusChip><span>Check: 4 {k0 ? (k0.name === "Shooting" ? "shoot" : k0.name.toLowerCase()) : ""} days{defLevel ? `, ${defLevel.name.split(",")[0].toLowerCase()} edit` : ""} → {money(fCheck)}</span></p>)}
+        </div>
+      </Fold>
 
       <Card className="rt" label="Check" head={<SectionHead label={k0 ? `Check: 4 ${k0.name === "Shooting" ? "shoot" : k0.name.toLowerCase()} days${defLevel ? `, ${defLevel.name.split(",")[0].toLowerCase()} ${kind(link0!.target)?.name.toLowerCase() ?? ""}` : ""}` : "Check"} />}>
         {check ? (
           <dl className="crm-dl rt-check">
             {check.lines.map((l) => <span key={l.kindId} className="crm-pair"><dt>{l.name}{link0 && l.kindId === link0.target && defLevel ? ` (${q(defLevel.mult)}×)` : ""}</dt><dd>{l.unit === "hour" ? `${q(l.qty)} h` : q(l.qty)}</dd></span>)}
+            {check.discounts?.map((d) => <span key={d.id} className="crm-pair"><dt>{d.name}</dt><dd>−{money(d.cents)}</dd></span>)}
             <dt className="big">Client price</dt><dd className="big">{money(check.priceCents)}</dd>
             <dt>Expenses</dt><dd>{money(check.expenseCents)}</dd>
             <dt>Net profit</dt><dd>{money(check.netCents)}</dd>

@@ -306,3 +306,57 @@ export function ownerSubscriptionFailedMail(b: MailBrand, d: { client: string; p
     { t: "button", label: "Open the subscription", href: d.link }, { t: "link", href: d.link },
   ], [{ t: "small", text: "WranglerPortal" }], `${d.client}: ${usd(d.amountCents)} didn’t go through`);
 }
+
+// ---------- 18 · 20 · 21: quick quotes (Phase 3b, S5 · Phase 3b 723:12971, 723:13026, 723:13052) ----------
+/** 18 · the quote, to the person it's for (no account needed, D81). */
+export function quoteMail(b: MailBrand, d: { name: string; number: string; title: string; totalCents: number; validUntil: string; terms: string | null; link: string }): Mail {
+  return mk(b, "updates", `Quote ${d.number} from ${b.name}: ${usd(d.totalCents)}`, [
+    hi(d.name),
+    { t: "p", text: `Here’s quote ${d.number} for ${d.title}.` },
+    { t: "sums", rows: [{ label: "Total", value: usd(d.totalCents), big: true }, { label: "Valid until", value: longDate(d.validUntil) }, { label: "Quote", value: `${d.number} · ${d.title}` }] },
+    ...(d.terms ? [{ t: "p", text: d.terms, tone: "muted" } as Block] : []),
+    { t: "p", text: "Accept or decline it on the quote page. No account needed. The PDF is there too." },
+    { t: "button", label: "View and accept", href: d.link }, { t: "link", href: d.link },
+  ], signoff(b), `${usd(d.totalCents)} · valid until ${longDate(d.validUntil)}`);
+}
+
+/** 19 · a proposal to the client (S5 · Phase 3b): read it and press Accept on its page; no account needed (D73). */
+export function proposalMail(b: MailBrand, d: { name: string; number: string; title: string; totalCents: number; sentAt: number; message: string | null; link: string }): Mail {
+  const sent = new Date(d.sentAt).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" });
+  return mk(b, "updates", `Proposal from ${b.name}: ${d.title}`, [
+    hi(d.name),
+    { t: "p", text: `Here’s our proposal for ${d.title}.` },
+    { t: "sums", rows: [{ label: "Investment", value: usd(d.totalCents), big: true }, { label: "Sent", value: sent }, { label: "Proposal", value: `${d.number} · ${d.title}` }] },
+    ...(d.message ? [{ t: "p", text: d.message } as Block] : []),
+    { t: "p", text: "Read it and press Accept on the proposal page. No account needed. The PDF is there too." },
+    { t: "button", label: "View proposal", href: d.link }, { t: "link", href: d.link },
+  ], signoff(b), `${d.title} · ${usd(d.totalCents)}`);
+}
+
+/** 22 · 23 · to the owner when the client answers a proposal (D84: nothing is drafted or moved). */
+export function ownerProposalAnsweredMail(b: MailBrand, d: { kind: "accepted" | "declined"; who: string; number: string; company: string; title: string; totalCents: number; at: string; reason: string | null; link: string }): Mail {
+  const accepted = d.kind === "accepted";
+  return mk(b, "updates", `${d.who} ${d.kind} proposal ${d.number}`, [
+    { t: "eyebrow", text: `${d.who} ${d.kind} proposal ${d.number}` },
+    { t: "title", text: `${d.company} · ${d.title} · ${usd(d.totalCents)}` },
+    { t: "p", text: accepted
+      ? `Accepted ${d.at}. Start the contract from it when you’re ready. Nothing has been drafted or moved.`
+      : `Declined ${d.at}.${d.reason ? "" : " No reason given."}` },
+    ...(!accepted && d.reason ? [{ t: "box", text: `Reason: ${d.reason}` } as Block] : []),
+    { t: "button", label: "Open the proposal", href: d.link },
+  ], [{ t: "small", text: "Sent to you when a client answers · WranglerPortal" }], `${d.who} ${d.kind} ${d.number}`);
+}
+
+/** 20 · 21 · to the owner when the person answers (D84: nothing is drafted or moved). */
+export function ownerQuoteAnsweredMail(b: MailBrand, d: { kind: "accepted" | "declined"; who: string; number: string; company: string; title: string; totalCents: number; at: string; reason: string | null; link: string }): Mail {
+  const accepted = d.kind === "accepted";
+  return mk(b, "updates", `${d.who} ${d.kind} quote ${d.number}`, [
+    { t: "eyebrow", text: `${d.who} ${d.kind} quote ${d.number}` },
+    { t: "title", text: `${d.company} · ${d.title} · ${usd(d.totalCents)}` },
+    { t: "p", text: accepted
+      ? `Accepted ${d.at}. Draft a contract, an invoice, or both from it when you’re ready. Nothing has been drafted or moved.`
+      : `Declined ${d.at}.${d.reason ? "" : " No reason given."}` },
+    ...(!accepted && d.reason ? [{ t: "box", text: `Reason: ${d.reason}` } as Block] : []),
+    { t: "button", label: "Open the quote", href: d.link },
+  ], [{ t: "small", text: "Sent to you when a client answers · WranglerPortal" }], `${d.who} ${d.kind} ${d.number}`);
+}

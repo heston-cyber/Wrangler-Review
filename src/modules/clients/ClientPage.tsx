@@ -15,13 +15,14 @@ import { errText } from "../docs/pages/common";
 import { INBOX_ICON, dayWord, firstName, itemDetail, monthDay, type InboxKind } from "../inbox/common";
 import { money } from "../payments/common";
 import { AddFollowUp, FollowUpRow } from "../crm/common";
+import { BrandKitEditor } from "../settings/BrandKit";
 
 type Page = NonNullable<ReturnType<typeof useQuery<typeof api.clients.page>>>;
 type Person = Page["people"][number];
 type Shared = Page["shared"][number];
 type Doc = Page["documents"][number];
 type Event = NonNullable<ReturnType<typeof useQuery<typeof api.inbox.forClient>>>[number];
-export type ClientTab = "overview" | "projects" | "shared" | "documents" | "inbox" | "settings";
+export type ClientTab = "overview" | "projects" | "shared" | "documents" | "inbox" | "brand" | "settings";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const ROLE = { signer: "Signs documents", contact: "Contact" } as const;
@@ -301,6 +302,23 @@ function FollowUpsCard({ crm, show, onAdd }: { crm: Crm | undefined; show: (m: s
   );
 }
 
+// Phase 3b (718:7002): this company's proposals and quick quotes.
+function PitchesCard({ clientId }: { clientId: Id<"clients"> }) {
+  const list = useQuery(api.proposals.forCompany, { clientId });
+  if (!list) return null;
+  const day = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const word: Record<string, string> = { draft: "Draft", waiting: "Waiting for Claude", ready: "Ready", sent: "Sent", accepted: "Accepted", declined: "Declined", void: "Withdrawn" };
+  const tone = (s: string): "neutral" | "accent" | "success" | "danger" | "warning" => (s === "accepted" ? "success" : s === "declined" ? "danger" : s === "waiting" ? "warning" : s === "sent" || s === "ready" ? "accent" : "neutral");
+  return (
+    <Card label="Proposals and quotes" head={<SectionHead label="Proposals and quotes" count={list.length} action={<ButtonLink size="sm" variant="ghost" to={`/proposals/new?client=${clientId}`} icon="plus">New proposal</ButtonLink>} />}>
+      {list.length === 0 ? <ListRow className="ilead quiet" lead={{ icon: "document" }} title="None yet." />
+        : rows(list, (x) => <ListRow className="ilead" lead={{ icon: x.kind === "proposal" ? "document" : "invoice" }} to={x.kind === "proposal" ? `/proposals/${x._id}` : `/payments/quotes/${x._id}`} title={x.title}
+          meta={[`${x.kind === "proposal" ? "Proposal" : "Quote"} ${x.number}`, x.response ? `${x.response.kind} ${day(x.response.at)}` : x.sentAt ? `sent ${day(x.sentAt)}` : null, x.validUntil && x.status === "sent" ? `valid until ${day(Date.parse(`${x.validUntil}T12:00:00`))}` : null].filter(Boolean).join(" · ")}
+          trailing={money(x.totalCents)} chip={<StatusChip tone={tone(x.status)}>{word[x.status] ?? x.status}</StatusChip>} chevron />, (x) => x._id)}
+    </Card>
+  );
+}
+
 // ---------- the page ----------
 export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"clients">; tab: ClientTab }) {
   const page = useQuery(api.clients.page, { clientId });
@@ -321,6 +339,8 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
   const actions = (
     <>
       <Button onClick={() => setFollowing(true)}>Add follow-up</Button>
+      <ButtonLink to={`/payments/quotes/new?client=${clientId}`}>Quick quote</ButtonLink>
+      <ButtonLink to={`/proposals/new?client=${clientId}`}>New proposal</ButtonLink>
       <ButtonLink variant="primary" to={`/clients/estimates/new?client=${clientId}`}>New estimate</ButtonLink>
     </>
   );
@@ -343,13 +363,14 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
           <Tabs label="Client" value={tab} onChange={setTab} items={[
             { key: "overview", label: "Overview" }, { key: "projects", label: "Projects", count: page.projects.length },
             { key: "shared", label: "Shared", count: page.shared.length }, { key: "documents", label: "Documents", count: page.documents.length },
-            { key: "inbox", label: "Their Inbox" }, { key: "settings", label: "Settings" },
+            { key: "inbox", label: "Their Inbox" }, { key: "brand", label: "Brand kit" }, { key: "settings", label: "Settings" },
           ]} />
         </div>
         {tab === "overview" && (
           <div className="wp-homecols cp-overview">
             <div className="col">
               <DealsCard crm={crm} clientId={clientId} />
+              <PitchesCard clientId={clientId} />
               <Card className="cp-projects" label="Projects" head={<SectionHead label="Projects" count={page.projects.length} action={<ButtonLink size="sm" variant="ghost" to="/projects" icon="plus">New project</ButtonLink>} />}><ProjectRows page={page} max={4} /></Card>
               <Card className="cp-shared" label="Shared with them" head={<SectionHead label="Shared with them" count={page.shared.length} action={<Button size="sm" variant="ghost" onClick={() => setSharing(true)} iconEnd="chevron-right">Share a cut</Button>} />}><SharedRows page={page} max={5} /></Card>
               <Card className="cp-docs" label="Documents" head={<SectionHead label="Documents" count={page.documents.length} action={<ButtonLink size="sm" variant="ghost" to="/sign/new" icon="plus">New document</ButtonLink>} />}><DocRows page={page} max={5} /></Card>
@@ -365,6 +386,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
         {tab === "shared" && <Card label="Shared with them"><SharedRows page={page} /></Card>}
         {tab === "documents" && <Card label="Documents"><DocRows page={page} /></Card>}
         {tab === "inbox" && <TheirInbox page={page} events={events} business={business} show={show} onAdd={() => setAdding(true)} />}
+        {tab === "brand" && <><p className="wp-body cp-kitnote">{name}'s brand, for decks made in their look. The questionnaire fills it; you can edit it any time.</p><BrandKitEditor clientId={clientId} show={show} /></>}
         {tab === "settings" && <ClientSettings clientId={clientId} name={name} settings={page.settings} show={show} />}
       </div>
       {sharing && <ShareDialog target={{ kind: "client", client: name }} label={name} onClose={() => setSharing(false)} show={show} />}

@@ -8,7 +8,7 @@ export async function downloadPdf(d: PdfData) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${d.number || "Invoice"}${d.kind === "receipt" ? " receipt" : ""}.pdf`;
+  a.download = `${d.number || (d.kind === "quote" ? "Quote" : "Invoice")}${d.kind === "receipt" ? " receipt" : ""}.pdf`;
   document.body.appendChild(a);
   a.click();
   a.remove();
