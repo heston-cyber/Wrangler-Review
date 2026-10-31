@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 export const modules = import.meta.glob("../convex/**/*.ts");
 
-export type Ids = { requestId: Id<"wsRequests">; buildId: Id<"wsBuilds">; templateId: Id<"wsTemplates">; clauseId: Id<"wsClauses">; styleId: Id<"wsStyles">; docId: Id<"wsDocuments">; wsVersionId: Id<"wsVersions">; projectId: Id<"projects">; videoId: Id<"videos">; shareId: Id<"shares">; replyId: Id<"replies">; versionId: Id<"versions">; noteId: Id<"notes">; fileId: Id<"dropFiles">; inviteId: Id<"invites">; keyId: Id<"connectorKeys">; storageId: Id<"_storage">; clientRecId: Id<"clients">; personId: Id<"clientPeople">; inboxItemId: Id<"inboxItems">; inboxNoteId: Id<"inboxNotes">; deliveryFileId: Id<"deliveryFiles">; invoiceId: Id<"invoices">; planId: Id<"plans">; subscriptionId: Id<"subscriptions"> };
+export type Ids = { requestId: Id<"wsRequests">; buildId: Id<"wsBuilds">; templateId: Id<"wsTemplates">; clauseId: Id<"wsClauses">; styleId: Id<"wsStyles">; docId: Id<"wsDocuments">; wsVersionId: Id<"wsVersions">; projectId: Id<"projects">; videoId: Id<"videos">; shareId: Id<"shares">; replyId: Id<"replies">; versionId: Id<"versions">; noteId: Id<"notes">; fileId: Id<"dropFiles">; inviteId: Id<"invites">; keyId: Id<"connectorKeys">; storageId: Id<"_storage">; clientRecId: Id<"clients">; personId: Id<"clientPeople">; inboxItemId: Id<"inboxItems">; inboxNoteId: Id<"inboxNotes">; deliveryFileId: Id<"deliveryFiles">; invoiceId: Id<"invoices">; planId: Id<"plans">; subscriptionId: Id<"subscriptions">; dealId: Id<"deals">; followUpId: Id<"followUps">; estimateId: Id<"estimates">; entryId: Id<"ledgerEntries"> };
 
 // Minimal valid arguments for each function, so the access check (not argument validation) is what refuses.
 export function argsFor(ids: Ids): Record<string, Record<string, unknown>> {
@@ -92,6 +92,12 @@ export function argsFor(ids: Ids): Record<string, Record<string, unknown>> {
     "subscriptions.changePreview": { subscriptionId: ids.subscriptionId, planId: ids.planId }, "subscriptions.changePlan": { subscriptionId: ids.subscriptionId, planId: ids.planId },
     "subscriptions.pause": { subscriptionId: ids.subscriptionId }, "subscriptions.resume": { subscriptionId: ids.subscriptionId }, "subscriptions.cancel": { subscriptionId: ids.subscriptionId, when: "now" },
     "subscriptions.setFailRule": { rule: "cancel" }, "subscriptions.setClientFailRule": { clientId: ids.clientRecId, rule: "cancel" }, "subscriptions.failRules": {},
+    "crm.rates": {}, "crm.saveRates": { rates: {} }, "crm.board": {}, "crm.addDeal": { title: "X" }, "crm.moveDeal": { dealId: ids.dealId, stage: "quoted" }, "crm.closeDeal": { dealId: ids.dealId },
+    "crm.deal": { dealId: "nope" }, "crm.companies": {}, "crm.company": { clientId: "nope" }, "crm.contact": { personId: "nope" }, "crm.followUps": {},
+    "crm.addFollowUp": { who: "A", about: "B", due: "2030-01-01" }, "crm.doneFollowUp": { followUpId: ids.followUpId }, "crm.getEstimate": { estimateId: "nope" },
+    "crm.saveEstimate": { title: "E", scope: "S", input: { unit: "days", amount: 1 } }, "crm.makeContract": { estimateId: ids.estimateId }, "crm.ledger": { projectId: "nope" },
+    "crm.logEntry": { projectId: ids.projectId, kind: "hours", hours: 1, date: "2030-01-01" }, "crm.entryAction": { entryId: ids.entryId, action: "confirm" },
+    "crm.setLedgerExport": { projectId: ids.projectId, on: true }, "crm.due": {},
     "plans.list": {}, "plans.get": { planId: ids.planId }, "plans.save": { name: "P", amountCents: 1000, interval: "month", intervalCount: 1 }, "plans.setArchived": { planId: ids.planId, archived: true },
     "invoices.send": { invoiceId: ids.invoiceId }, "invoices.voidInvoice": { invoiceId: ids.invoiceId },
     "invoicePay.page": { token: "nope-nope-nope-nope" }, "invoicePay.mine": {}, "invoicePay.markViewed": { token: "nope-nope-nope-nope" },
@@ -146,7 +152,11 @@ export async function setup() {
     const invoiceId = await ctx.db.insert("invoices", { projectId, kind: "other", title: "T", billTo: { name: "A", email: "a@b.co" }, lines: [], dueDate: "2030-01-01", status: "draft", totalCents: 0, amountPaidCents: 0, amountRemainingCents: 0, history: [], createdAt: 0, updatedAt: 0 });
     const planId = await ctx.db.insert("plans", { name: "P", amountCents: 1000, interval: "month", intervalCount: 1, stripe: { accountId: "acct_x", productId: "prod_x", priceId: "price_x", livemode: false }, createdAt: 0, updatedAt: 0 });
     const subscriptionId = await ctx.db.insert("subscriptions", { planId, priceId: "price_x", planName: "P", amountCents: 1000, interval: "month", intervalCount: 1, billTo: { name: "A", email: "a@b.co" }, status: "incomplete", startDate: "2030-01-01", firstInvoice: "now", payToken: "subtokensubtoken01", stripe: { accountId: "acct_x", customerId: "cus_x", subscriptionId: "sub_x", livemode: false }, history: [], createdAt: 0, updatedAt: 0 });
-    return { subscriptionId, planId, invoiceId, deliveryFileId, clientRecId, personId, inboxItemId, inboxNoteId, requestId, buildId, templateId, clauseId, styleId, docId, wsVersionId, wsKeyId, projectId, videoId, versionId, noteId, fileId, inviteId, keyId, storageId, shareId, replyId, ownerSub: await sess(owner), strangerSub: await sess(stranger), clientSub: await sess(client) };
+    const dealId = await ctx.db.insert("deals", { title: "D", stage: "lead", source: "hand", history: [], createdAt: 0, updatedAt: 0 });
+    const followUpId = await ctx.db.insert("followUps", { who: "A", about: "B", due: "2030-01-01", createdAt: 0 });
+    const estimateId = await ctx.db.insert("estimates", { title: "E", scope: "", input: {}, rates: {}, result: { lines: [] }, createdAt: 0, updatedAt: 0 });
+    const entryId = await ctx.db.insert("ledgerEntries", { projectId, kind: "hours", hours: 1, date: "2030-01-01", createdAt: 0 });
+    return { dealId, followUpId, estimateId, entryId, subscriptionId, planId, invoiceId, deliveryFileId, clientRecId, personId, inboxItemId, inboxNoteId, requestId, buildId, templateId, clauseId, styleId, docId, wsVersionId, wsKeyId, projectId, videoId, versionId, noteId, fileId, inviteId, keyId, storageId, shareId, replyId, ownerSub: await sess(owner), strangerSub: await sess(stranger), clientSub: await sess(client) };
   });
   return { t, ids };
 }

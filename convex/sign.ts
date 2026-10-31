@@ -19,6 +19,7 @@ import { randomToken } from "./lib/hash";
 import { DEFAULT_EXPIRY_DAYS, cleanLine, signLink } from "./lib/wsSigning";
 import { pngProblem } from "./lib/pngCheck";
 import { businessContact, businessInScope } from "./lib/business";
+import { crmDocument } from "./crm";
 
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const MAX_PNG_BYTES = 600 * 1024;
@@ -477,6 +478,7 @@ async function sendCore(ctx: MutationCtx, versionId: Id<"wsVersions">, expiresIn
     }
     const expiresAt = now + days * 86_400_000;
     await ctx.db.patch(doc._id, { status: "sent", sentAt: now, sentVersion: ver.number, expiresAt, updatedAt: now });
+    await crmDocument(ctx, doc._id, "contract_sent", "contract sent"); // Phase 3: the pipeline card moves on
     await appendEvent(ctx, doc._id, { kind: "send_settings", actor, versionNumber: ver.number, detail: `${actor === OWNER_KEY ? "" : "Sent by Claude, on Heston's OK in chat. "}Sent version ${ver.number} to ${clients.length} signer${clients.length === 1 ? "" : "s"} (${ver.signingOrder === "any" ? "any order" : "one after another"}); links work until ${new Date(expiresAt).toISOString()}.` });
     await closeRequests(ctx, doc._id, ["approve", "send"]);
     return { sent: clients.length, expiresAt };

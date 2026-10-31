@@ -11,6 +11,7 @@ import { api as wsApi, preflight as wsPreflight } from "./signing";
 import { verifyHttp as wsVerify } from "./signDone";
 import { callback as wsDropboxCallback } from "./wsArchive";
 import { connectWebhook } from "./payments";
+import { webflow as webflowLeads } from "./leads";
 
 const http = httpRouter();
 auth.addHttpRoutes(http);
@@ -56,6 +57,8 @@ http.route({ path: "/ws-s0/ip", method: "GET", handler: wsS0Ip });
 
 // Phase 2 Part B: Stripe Connect events (account changes now; invoices and payments next).
 http.route({ path: "/stripe/connect", method: "POST", handler: connectWebhook });
+// Phase 3: leads from the website's quote form (off until WEBFLOW_WEBHOOK_SECRET is set).
+http.route({ path: "/leads/webflow", method: "POST", handler: webflowLeads });
 http.route({ path: "/email/stop", method: "GET", handler: emailStop });
 http.route({ path: "/email/stop", method: "POST", handler: emailStop });
 

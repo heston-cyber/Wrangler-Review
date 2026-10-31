@@ -95,7 +95,7 @@ describe("MCP protocol", () => {
     expect(unknownVer.j.result.protocolVersion).toBe("2025-11-25");
     expect((await rpc(t, { jsonrpc: "2.0", method: "notifications/initialized" }, { key })).status).toBe(202);
     const list = await rpc(t, { jsonrpc: "2.0", id: 2, method: "tools/list" }, { key });
-    expect(list.j.result.tools.map((x: { name: string }) => x.name)).toEqual(["find_videos", "get_notes", "get_note_images", "get_resolve_markers", "get_transcript", "reply_to_note", "mark_notes", "register_video", "add_to_register", "next_render_name", "set_version_description", "get_client_inbox", "draft_client_note"]);
+    expect(list.j.result.tools.map((x: { name: string }) => x.name)).toEqual(["find_videos", "get_notes", "get_note_images", "get_resolve_markers", "get_transcript", "reply_to_note", "mark_notes", "register_video", "add_to_register", "next_render_name", "set_version_description", "get_client_inbox", "list_follow_ups", "draft_follow_up", "draft_ledger_entry", "draft_client_note"]);
     expect(list.j.result.resultType).toBeUndefined();
     const batch = await rpc(t, [{ jsonrpc: "2.0", id: 3, method: "ping" }, { jsonrpc: "2.0", method: "notifications/initialized" }], { key });
     expect(batch.j).toEqual([{ jsonrpc: "2.0", id: 3, result: {} }]);
@@ -112,7 +112,7 @@ describe("MCP protocol", () => {
     expect(d.j.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("wrangler-review");
     const l = await rpc(t, { jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: META } }, { key });
     expect(l.j.result.ttlMs).toBeGreaterThan(0);
-    expect(l.j.result.tools).toHaveLength(13);
+    expect(l.j.result.tools).toHaveLength(16);
     const bad = await rpc(t, { jsonrpc: "2.0", id: 3, method: "tools/list", params: { _meta: { ...META, "io.modelcontextprotocol/protocolVersion": "2099-01-01" } } }, { key });
     expect([bad.status, bad.j.error.code]).toEqual([400, -32022]);
     expect(bad.j.error.data.supported).toContain("2026-07-28");

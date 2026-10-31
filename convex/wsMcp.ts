@@ -268,9 +268,9 @@ async function pdfResource(ctx: ActionCtx, url: string, name: string): Promise<C
 
 // ---------- builder drafts (B4) ----------
 
-type FieldArgs = { client?: Partial<Fields["client"]>; project?: string; date?: string; custom_fields?: Record<string, string>; extra_signers?: ExtraSigner[]; line_items?: Array<{ description: string; qty?: number; rate: number }>; deposit_percent?: number };
+export type FieldArgs = { client?: Partial<Fields["client"]>; project?: string; date?: string; custom_fields?: Record<string, string>; extra_signers?: ExtraSigner[]; line_items?: Array<{ description: string; qty?: number; rate: number }>; deposit_percent?: number };
 /** The fill-in fields, signers, line items and deposit from a tool's arguments, onto a draft. */
-function applyArgs(fields: Fields, signers: ExtraSigner[], page: Page, a: FieldArgs): { fields: Fields; signers: ExtraSigner[]; page: Page } {
+export function applyArgs(fields: Fields, signers: ExtraSigner[], page: Page, a: FieldArgs): { fields: Fields; signers: ExtraSigner[]; page: Page } {
   const f: Fields = { ...fields, client: { ...fields.client } };
   if (a.client) for (const [k, val] of Object.entries(a.client)) if (typeof val === "string") (f.client as Record<string, string>)[k] = k === "email" ? val.trim().toLowerCase() : val.trim();
   if (typeof a.project === "string") f.project = a.project.trim();

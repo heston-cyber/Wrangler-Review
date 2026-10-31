@@ -257,7 +257,8 @@ export const feed = httpAction(async (ctx, req) => {
   if (key) ctx = forBusiness(ctx, await ctx.runQuery(internal.register.businessOfSheetKey, { hash })); // only that key's business
   const r = key ? await ctx.runMutation(internal.register.feedRows, { hash }) : null;
   if (!r) return new Response(JSON.stringify({ error: "Wrong or missing sheet key. Make a new one in Wrangler Review › Settings › Google Sheet copy." }), { status: 401, headers: { "content-type": "application/json" } });
-  return new Response(JSON.stringify({ updated: new Date().toISOString(), columns: FEED_COLUMNS, rows: feedTable(r) }), {
+  const ledger = await ctx.runQuery(internal.crm.ledgerRows, {}); // Phase 3 (D58): the "Job ledger" tab
+  return new Response(JSON.stringify({ updated: new Date().toISOString(), columns: FEED_COLUMNS, rows: feedTable(r), ledger }), {
     status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 });

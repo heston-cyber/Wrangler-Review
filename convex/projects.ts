@@ -16,6 +16,7 @@ import { postToInbox, businessOf, hasAccess } from "./lib/inbox";
 import { coveredProjects, coveredVideos, sameBusiness, shareState } from "./lib/shareAccess";
 import { downloadFor, signedThumbUrl, signStillUrl } from "./lib/media";
 import { docLabel } from "./lib/wsLayout";
+import { crmProject } from "./crm";
 
 export const STAGES = ["discovery", "strategy", "production", "polish", "delivery"] as const;
 export type Stage = (typeof STAGES)[number];
@@ -124,6 +125,7 @@ export const setStage = mutation({
     const p = await ownedProject(ctx, a.projectId);
     const now = Date.now();
     await ctx.db.patch(p._id, { stage: a.stage, updatedAt: now });
+    if (["production", "polish", "delivery"].includes(a.stage)) await crmProject(ctx, p._id, "in_production", `project stage: ${a.stage}`); // Phase 3
     let posted = 0;
     if (a.post) {
       const biz = await businessOf(ctx, p);
@@ -269,6 +271,7 @@ export async function openDelivery(ctx: MutationCtx, p: Doc<"projects">): Promis
   if (!files) return null;
   const now = Date.now();
   await ctx.db.patch(p._id, { deliveryUnlockedAt: now, updatedAt: now });
+  await crmProject(ctx, p._id, "delivered", "final files opened"); // Phase 3
   let posted = 0;
   const biz = await businessOf(ctx, p);
   if (biz) for (const person of await portalPeople(ctx, p)) {

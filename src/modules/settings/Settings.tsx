@@ -50,6 +50,15 @@ function refreshRegister() {
   if (rows.length) sh.getRange(2, 1, rows.length, cols.length).setValues(rows);
   sh.setFrozenRows(1);
   sh.getRange(1, cols.length + 2).setValue("Updated " + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MMM d, h:mm a"));
+  // Phase 3 (D58): the "Job ledger" tab, one row per project exported from its Ledger tab.
+  if (data.ledger && data.ledger.length) {
+    const lg = ss.getSheetByName("Job ledger") || ss.insertSheet("Job ledger");
+    const lcols = Object.keys(data.ledger.reduce(function (a, r) { Object.keys(r).forEach(function (k) { a[k] = 1; }); return a; }, {}));
+    lg.clearContents();
+    lg.getRange(1, 1, 1, lcols.length).setValues([lcols]).setFontWeight("bold");
+    lg.getRange(2, 1, data.ledger.length, lcols.length).setValues(data.ledger.map(function (r) { return lcols.map(function (c) { return r[c] === undefined ? "" : r[c]; }); }));
+    lg.setFrozenRows(1);
+  }
 }
 
 function setUp() {

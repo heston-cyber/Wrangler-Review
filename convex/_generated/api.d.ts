@@ -14,6 +14,8 @@ import type * as home from "../home.js";
 import type * as portal from "../portal.js";
 import type * as invoicePay from "../invoicePay.js";
 import type * as invoiceReminders from "../invoiceReminders.js";
+import type * as crm from "../crm.js";
+import type * as leads from "../leads.js";
 import type * as plans from "../plans.js";
 import type * as subscriptionClock from "../subscriptionClock.js";
 import type * as subscriptions from "../subscriptions.js";
@@ -122,6 +124,8 @@ declare const fullApi: ApiFromModules<{
   portal: typeof portal;
   invoicePay: typeof invoicePay;
   invoiceReminders: typeof invoiceReminders;
+  crm: typeof crm;
+  leads: typeof leads;
   plans: typeof plans;
   subscriptionClock: typeof subscriptionClock;
   subscriptions: typeof subscriptions;

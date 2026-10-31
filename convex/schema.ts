@@ -123,6 +123,7 @@ export default defineSchema({
   projects: defineTable({
     businessId: v.optional(v.id("businesses")), // Phase 0.5d step 2; required from step 3
     name: v.string(),
+    ledgerExportedAt: v.optional(v.number()),   // Phase 3 (D58): included in the Settings Sheet's "Job ledger" tab
     jobNumber: v.optional(v.string()),
     client: v.optional(v.string()),
     clientId: v.optional(v.id("clients")), // Phase 0.5d step 5: the client's record (kept in step with `client`)
@@ -710,6 +711,8 @@ export default defineSchema({
       domain: v.optional(v.object({ name: v.string(), at: v.number(), ok: v.boolean(), applePay: v.optional(v.string()), error: v.optional(v.string()) })),
       startedAt: v.number(), connectedAt: v.optional(v.number()), disconnectedAt: v.optional(v.number()), checkedAt: v.number(),
     })),
+    // Phase 3: Settings › Estimate rates (lib/estimate.ts Rates). Missing: Wrangler's from me-wrangler § 4, others empty.
+    estimateRates: v.optional(v.any()),
     // Phase 2b (D64): when Stripe's last retry of a subscription payment fails: keep it past due (default) or cancel it.
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))),
     // Phase 2 Part B step 4 (D51): automatic invoice reminders, off until the owner turns them on (that's their OK).
@@ -721,6 +724,75 @@ export default defineSchema({
       stopAfter: v.number(),    // at most this many overdue reminders
     })),
   }).index("by_slug", ["slug"]).index("by_stripe_account", ["stripe.accountId"]),
+
+  // Phase 3 (Oct 31): the pipeline. A deal is one card: a lead from the website or added by hand, or the job an estimate
+  // is for. Seven fixed stages (D59); events only ever move a card forward, a card dragged by hand stays until a later
+  // event moves it further (D60). Back office only.
+  deals: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    title: v.string(),
+    clientId: v.optional(v.id("clients")),       // the company (made at the first estimate for a website lead, D56)
+    contactEmail: v.optional(v.string()),
+    projectId: v.optional(v.id("projects")),
+    documentId: v.optional(v.id("wsDocuments")), // the contract drafted from its estimate
+    estimateId: v.optional(v.id("estimates")),
+    valueCents: v.optional(v.number()),
+    stage: v.union(v.literal("lead"), v.literal("quoted"), v.literal("contract_sent"), v.literal("signed"), v.literal("in_production"), v.literal("delivered"), v.literal("paid")),
+    source: v.union(v.literal("website"), v.literal("hand"), v.literal("estimate")),
+    lead: v.optional(v.object({ name: v.string(), email: v.string(), company: v.optional(v.string()), phone: v.optional(v.string()), message: v.optional(v.string()),
+      fields: v.array(v.object({ label: v.string(), value: v.string() })), at: v.number() })),
+    closedAt: v.optional(v.number()),            // "Not a lead", or taken off the board
+    history: v.array(v.object({ kind: v.string(), at: v.number(), by: v.optional(v.string()), detail: v.optional(v.string()) })),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_project", ["projectId"]).index("by_document", ["documentId"]).index("by_client", ["clientId"]),
+
+  estimates: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    dealId: v.optional(v.id("deals")),
+    clientId: v.optional(v.id("clients")),
+    projectId: v.optional(v.id("projects")),
+    title: v.string(),
+    scope: v.string(),
+    input: v.any(),                              // EstimateInput (lib/estimate.ts) plus the shooting unit
+    rates: v.any(),                              // the rates as they were when it was saved
+    result: v.any(),                             // Estimate (lib/estimate.ts)
+    documentId: v.optional(v.id("wsDocuments")),
+    buildId: v.optional(v.id("wsBuilds")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_deal", ["dealId"]).index("by_project", ["projectId"]),
+
+  followUps: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    dealId: v.optional(v.id("deals")),
+    clientId: v.optional(v.id("clients")),
+    who: v.string(),
+    email: v.optional(v.string()),
+    about: v.string(),
+    due: v.string(),                             // yyyy-mm-dd
+    note: v.optional(v.string()),
+    doneAt: v.optional(v.number()),
+    draft: v.optional(v.boolean()),              // made by Claude: does nothing until confirmed (D67)
+    createdBy: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_client", ["clientId"]).index("by_deal", ["dealId"]),
+
+  // The job ledger (a project tab): hours and costs logged against the project, compared with its estimate.
+  ledgerEntries: defineTable({
+    businessId: v.optional(v.id("businesses")),
+    projectId: v.id("projects"),
+    kind: v.union(v.literal("hours"), v.literal("cost")),
+    workId: v.optional(v.string()),              // the kind of work (rates) the hours or cost is for
+    hours: v.optional(v.number()),
+    cents: v.optional(v.number()),
+    who: v.optional(v.string()),                 // "Heston", a subcontractor
+    note: v.optional(v.string()),
+    date: v.string(),
+    draft: v.optional(v.boolean()),              // drafted by Claude from notes: counts once confirmed (D67)
+    createdBy: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_project", ["projectId"]),
 
   // Phase 2b (Oct 30): plans. A plan is a price the owner reuses for subscriptions; it lives as a product with a price
   // in the business's own Stripe account (direct charges). Changing the price makes a new Stripe price; subscriptions

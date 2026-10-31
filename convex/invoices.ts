@@ -16,6 +16,7 @@ import { clientDocs, openDelivery } from "./projects";
 import { pageOf, totals as builderTotals } from "./lib/wsBuilder";
 import { announceSent } from "./invoicePay";
 import { nextReminder } from "./invoiceReminders";
+import { crmProject } from "./crm";
 
 const DAY = 86_400_000;
 const MIN_CENTS = 50; // Stripe's smallest card charge in USD
@@ -609,6 +610,8 @@ export const applyStripeInvoice = internalMutation({
       stripe: { ...i.stripe!, number: s.number ?? i.stripe!.number, hostedUrl: s.hosted_invoice_url ?? i.stripe!.hostedUrl, pdfUrl: s.invoice_pdf ?? i.stripe!.pdfUrl },
       history: history.slice(-60), updatedAt: now,
     });
+    // Phase 3: the final invoice paid moves the pipeline card to Paid (forward only, D60).
+    if (status === "paid" && i.status !== "paid" && i.kind === "final" && i.projectId) await crmProject(ctx, i.projectId, "paid", `${i.number ?? "final invoice"} paid`);
     // A final invoice paid in full opens the project's final files (the Part A lock, now automatic).
     if (status === "paid" && i.status !== "paid" && i.kind === "final" && i.projectId) {
       const p = await ctx.db.get(i.projectId);

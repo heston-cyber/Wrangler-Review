@@ -34,6 +34,7 @@ import { pngProblem } from "./lib/pngCheck";
 import { allowedEmails } from "./auth";
 import { bump } from "./lib/rate";
 import { businessContact, businessInScope, defaultBusiness } from "./lib/business";
+import { crmDocument } from "./crm";
 
 export const SIGN_STATEMENT = "By clicking Sign, I agree that my electronic signature and initials on this document are the legal equivalent of my handwritten signature and initials, and that I intend to sign it.";
 export const COMPANY = "Wrangler Productions, a DBA of Hill Creative LLC";
@@ -395,6 +396,7 @@ export const sign = internalMutation({
     const rest = all.filter((x) => x._id !== s._id && x.status !== "signed");
     if (!rest.length) {
       await ctx.db.patch(doc._id, { status: "completed", completedAt: now, updatedAt: now });
+      await crmDocument(ctx, doc._id, "signed", "contract signed"); // Phase 3: the pipeline card moves on
       await appendEvent(ctx, doc._id, { kind: "all_signed", actor: "system", versionNumber: ver.number, detail: `Every signer has signed version ${ver.number}.` });
       await ctx.scheduler.runAfter(0, internal.signDone.finish, { documentId: doc._id });
       return { ok: true, complete: true };
