@@ -15,13 +15,14 @@ import { errText } from "../docs/pages/common";
 import { INBOX_ICON, dayWord, firstName, itemDetail, monthDay, type InboxKind } from "../inbox/common";
 import { money } from "../payments/common";
 import { AddFollowUp, FollowUpRow } from "../crm/common";
+import { BrandKitEditor } from "../settings/BrandKit";
 
 type Page = NonNullable<ReturnType<typeof useQuery<typeof api.clients.page>>>;
 type Person = Page["people"][number];
 type Shared = Page["shared"][number];
 type Doc = Page["documents"][number];
 type Event = NonNullable<ReturnType<typeof useQuery<typeof api.inbox.forClient>>>[number];
-export type ClientTab = "overview" | "projects" | "shared" | "documents" | "inbox" | "settings";
+export type ClientTab = "overview" | "projects" | "shared" | "documents" | "inbox" | "brand" | "settings";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const ROLE = { signer: "Signs documents", contact: "Contact" } as const;
@@ -343,7 +344,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
           <Tabs label="Client" value={tab} onChange={setTab} items={[
             { key: "overview", label: "Overview" }, { key: "projects", label: "Projects", count: page.projects.length },
             { key: "shared", label: "Shared", count: page.shared.length }, { key: "documents", label: "Documents", count: page.documents.length },
-            { key: "inbox", label: "Their Inbox" }, { key: "settings", label: "Settings" },
+            { key: "inbox", label: "Their Inbox" }, { key: "brand", label: "Brand kit" }, { key: "settings", label: "Settings" },
           ]} />
         </div>
         {tab === "overview" && (
@@ -365,6 +366,7 @@ export default function ClientPage({ clientId, tab: tabParam }: { clientId: Id<"
         {tab === "shared" && <Card label="Shared with them"><SharedRows page={page} /></Card>}
         {tab === "documents" && <Card label="Documents"><DocRows page={page} /></Card>}
         {tab === "inbox" && <TheirInbox page={page} events={events} business={business} show={show} onAdd={() => setAdding(true)} />}
+        {tab === "brand" && <><p className="wp-body cp-kitnote">{name}'s brand, for decks made in their look. The questionnaire fills it; you can edit it any time.</p><BrandKitEditor clientId={clientId} show={show} /></>}
         {tab === "settings" && <ClientSettings clientId={clientId} name={name} settings={page.settings} show={show} />}
       </div>
       {sharing && <ShareDialog target={{ kind: "client", client: name }} label={name} onClose={() => setSharing(false)} show={show} />}

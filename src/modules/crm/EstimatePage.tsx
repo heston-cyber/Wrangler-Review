@@ -178,6 +178,7 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
                 <span className="grp">The client sees</span>
                 <dt>{n++} · Scope</dt><dd>{title.trim() || "—"}</dd>
                 {shown.map((x) => <span key={x.id} className="crm-pair"><dt>{n++} · {x.name.replace(/ day$/i, "")} {unitWord(x.unit)}</dt><dd>{x.unit === "hour" ? `${q(qtyOf(x.id))} h` : q(qtyOf(x.id))}</dd></span>)}
+                {result!.discounts?.map((d) => <span key={d.id} className="crm-pair"><dt>{d.name}</dt><dd>−{money(d.cents)}</dd></span>)}
                 <dt className="big">{n++} · Client project price</dt><dd className="big">{money(result!.priceCents)}</dd>
                 <span className="grp line">Only you see</span>
                 {shown.map((x) => <span key={x.id} className="crm-pair"><dt>{n++} · {x.name.replace(/ day$/i, "")} expense</dt><dd>{money(lines.find((l) => l.kindId === x.id)?.costCents ?? 0)}</dd></span>)}
@@ -189,7 +190,7 @@ export default function EstimatePage({ estimateId, dealId, clientId, projectId }
             </Card>
             <Card label="Contract draft" head={<SectionHead label="Contract draft" />}>
               <dl className="crm-lines">
-                <dt>Line items</dt><dd>{lines.length ? lines.map((l) => `${l.name.replace(/ day$/i, "")} ${l.unit === "hour" ? `${q(l.qty)} h` : `${q(l.qty)} day${l.qty === 1 ? "" : "s"}`}`).join(" · ") : "—"}</dd>
+                <dt>Line items</dt><dd>{lines.length ? [...lines.map((l) => `${l.name.replace(/ day$/i, "")} ${l.unit === "hour" ? `${q(l.qty)} h` : `${q(l.qty)} day${l.qty === 1 ? "" : "s"}`}`), ...(result!.discounts ?? []).map((d) => d.name)].join(" · ") : "—"}</dd>
                 <dt className="big">Deposit ({DEPOSIT}%)</dt><dd className="big">{money(Math.round((result!.priceCents * DEPOSIT) / 100))}</dd>
               </dl>
               <p className="crm-note">Make contract draft opens a Sign draft from your Service agreement template with these lines and the deposit.{saved?.buildId ? " This estimate already has one; it opens that draft." : ""}</p>

@@ -417,7 +417,7 @@ export const makeContract = action({
     if (existing && t.e.contractAt && t.e.contractAt >= t.e.updatedAt) return { buildId: existing._id };
     await ctx.runMutation(internal.crm.claimContract, { estimateId });
     try {
-      const result = t.e.result as { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }> };
+      const result = t.e.result as { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }>; discounts?: Array<{ name: string; cents: number }> };
       let buildId: Id<"wsBuilds">;
       if (existing) buildId = existing._id;
       else {
@@ -437,12 +437,14 @@ export const makeContract = action({
 });
 
 type Target = { e: Doc<"estimates">; company: string; signer: { name: string; email: string } | null; project: string };
-async function fillContract(ctx: ActionCtx, buildId: Id<"wsBuilds">, t: Target, result: { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }> }, depositPercent: number) {
+async function fillContract(ctx: ActionCtx, buildId: Id<"wsBuilds">, t: Target, result: { lines: Array<{ name: string; unit: "hour" | "day"; qty: number; clientCents: number }>; discounts?: Array<{ name: string; cents: number }> }, depositPercent: number) {
     const b = (await ctx.runQuery(internal.builder.buildInternal, { buildId }))!;
     const r = applyArgs(b.fields as Fields, (b.signers as never) ?? [], b.page, {
       client: { name: t.signer?.name ?? "", email: t.signer?.email ?? "", company: t.company },
       project: t.project, date: todayIso(),
-      line_items: result.lines.map((l) => ({ description: `${l.name}${l.unit === "hour" ? " (hours)" : " (days)"}`, qty: l.qty, rate: Math.round(l.clientCents / l.qty) / 100 })),
+      // D88: a discount is its own line, so the contract's total is the estimate's price.
+      line_items: [...result.lines.map((l) => ({ description: `${l.name}${l.unit === "hour" ? " (hours)" : " (days)"}`, qty: l.qty, rate: Math.round(l.clientCents / l.qty) / 100 })),
+        ...(result.discounts ?? []).map((d) => ({ description: `Discount: ${d.name}`, qty: 1, rate: -d.cents / 100 }))],
       deposit_percent: Math.max(0, Math.min(100, depositPercent)),
     });
     await ctx.runMutation(internal.builder.patchBuild, { buildId, page: r.page, fields: r.fields, signers: r.signers });

@@ -92,6 +92,7 @@ export function argsFor(ids: Ids): Record<string, Record<string, unknown>> {
     "subscriptions.changePreview": { subscriptionId: ids.subscriptionId, planId: ids.planId }, "subscriptions.changePlan": { subscriptionId: ids.subscriptionId, planId: ids.planId },
     "subscriptions.pause": { subscriptionId: ids.subscriptionId }, "subscriptions.resume": { subscriptionId: ids.subscriptionId }, "subscriptions.cancel": { subscriptionId: ids.subscriptionId, when: "now" },
     "subscriptions.setFailRule": { rule: "cancel" }, "subscriptions.setClientFailRule": { clientId: ids.clientRecId, rule: "cancel" }, "subscriptions.failRules": {},
+    "brandKit.get": {}, "brandKit.save": { colors: [], fonts: {}, links: [], tone: [] }, "brandKit.uploadUrl": {}, "brandKit.addFile": { storageId: ids.storageId, name: "x.pdf" }, "brandKit.removeFile": { fileId: ids.storageId },
     "crm.rates": {}, "crm.saveRates": { rates: {} }, "crm.board": {}, "crm.addDeal": { title: "X" }, "crm.moveDeal": { dealId: ids.dealId, stage: "quoted" }, "crm.closeDeal": { dealId: ids.dealId },
     "crm.deal": { dealId: "nope" }, "crm.companies": {}, "crm.company": { clientId: "nope" }, "crm.contact": { personId: "nope" }, "crm.followUps": {},
     "crm.addFollowUp": { who: "A", about: "B", due: "2030-01-01" }, "crm.doneFollowUp": { followUpId: ids.followUpId }, "crm.getEstimate": { estimateId: "nope" },

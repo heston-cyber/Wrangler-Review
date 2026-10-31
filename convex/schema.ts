@@ -404,6 +404,7 @@ export default defineSchema({
     rounds: v.optional(v.number()),          // Phase 2: rounds per video for this client's projects (missing: the business's)
     watermarkOff: v.optional(v.boolean()),   // Phase 2 (D24): review copies are watermarked unless switched off here
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))), // Phase 2b (D64): overrides the business's choice
+    brandKit: v.optional(v.any()),           // Phase 3b (D71): the company's brand kit (convex/brandKit.ts)
   }).index("by_name", ["name"]).index("by_dropbox_folder", ["dropboxFolder"]),
 
   // Playback problems the browser reported (Oct 21), so they can be diagnosed on devices Claude can't reach.
@@ -713,6 +714,7 @@ export default defineSchema({
     })),
     // Phase 3: Settings › Estimate rates (lib/estimate.ts Rates). Missing: Wrangler's from me-wrangler § 4, others empty.
     estimateRates: v.optional(v.any()),
+    brandKit: v.optional(v.any()),           // Phase 3b (D71): Settings › Brand kit (convex/brandKit.ts)
     // Phase 2b (D64): when Stripe's last retry of a subscription payment fails: keep it past due (default) or cancel it.
     subFailRule: v.optional(v.union(v.literal("past_due"), v.literal("cancel"))),
     // Phase 2 Part B step 4 (D51): automatic invoice reminders, off until the owner turns them on (that's their OK).

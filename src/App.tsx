@@ -184,7 +184,7 @@ function SignedIn() {
   else if (/^\/sent\/?$/.test(path)) page = <SentPage />;
   else if (sentNote && sentNote[1] !== "new") page = <SentNote key={sentNote[1]} noteId={sentNote[1] as Id<"inboxNotes">} sent={Number(params.get("sent")) || null} />;
   else if (/^\/sent\/new\/?$/.test(path)) page = <PostNote key={params.get("note") ?? "new"} noteId={(params.get("note") as Id<"inboxNotes"> | null) ?? null} clientId={(params.get("client") as Id<"clients"> | null) ?? null} />;
-  else if (clientRec) { const t = params.get("tab"); page = <ClientPage key={clientRec[1]} clientId={clientRec[1] as Id<"clients">} tab={(["projects", "shared", "documents", "inbox", "settings"].includes(t ?? "") ? t : "overview") as ClientTab} />; }
+  else if (clientRec) { const t = params.get("tab"); page = <ClientPage key={clientRec[1]} clientId={clientRec[1] as Id<"clients">} tab={(["projects", "shared", "documents", "inbox", "brand", "settings"].includes(t ?? "") ? t : "overview") as ClientTab} />; }
   else if (path.startsWith("/activity")) page = <ActivityPage />;
   else if (path.startsWith("/register")) page = <Settings me={me} />; // now Settings › Register
   else if (path.startsWith("/settings")) page = <Settings me={me} />;

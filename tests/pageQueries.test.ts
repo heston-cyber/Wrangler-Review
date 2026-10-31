@@ -92,6 +92,7 @@ const PAGES: Record<string, { pages: Page[]; args: (ids: Ids, share: Share | nul
   "crm.getEstimate": { pages: ["owner"], args: () => "skip" }, // an estimate
   "crm.ledger": { pages: ["owner"], args: () => "skip" }, // a project's Ledger tab
   "crm.rates": { pages: ["owner"], args: () => "skip" }, // Settings › Estimate rates, the estimate page
+  "brandKit.get": { pages: ["owner"], args: () => "skip" }, // Settings › Brand kit, a company's Brand kit tab (Phase 3b)
   "subscriptions.get": { pages: ["owner"], args: () => "skip" }, // a subscription
   "subscriptions.page": { pages: ["share"], args: () => ({ token: "not-a-real-token-xx" }) }, // /sub/<token>, the client's page (with or without an account)
   "subscriptions.mine": { pages: ["clientHome"], args: () => ({}) }, // the client's Payments › Subscriptions
