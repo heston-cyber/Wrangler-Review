@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { Button, SkeletonRows, StatusChip, Toggle } from "../../ui/wp";
+import { Button, SkeletonRows, StatusChip, Toggle, Segmented } from "../../ui/wp";
 import { Icon } from "../../ui/Icon";
 import { Modal } from "../../ui/kit";
 import { useLocation } from "../../lib/router";
@@ -40,12 +40,11 @@ function SubFail({ show }: { show: (m: string) => void }) {
   return (
     <div className="panel pay-card">
       <span className="wp-eyebrow">Subscriptions</span>
-      <label className="wp-field"><span className="wp-field-label">When a subscription payment fails for good</span>
-        <select className="input" value={rules.business} onChange={(e) => set(e.target.value as "past_due" | "cancel")}>
-          <option value="past_due">Keep it past due (you decide what happens)</option>
-          <option value="cancel">Cancel the subscription</option>
-        </select></label>
-      <p className="secondary pay-note">After Stripe's last retry. Each client's Settings tab can set it differently. In your Stripe account, set Billing › Revenue recovery to leave the subscription as it is, so the portal applies this.</p>
+      {/* D64 row as approved (702:1451): the question, the line under it, then the two choices. */}
+      <div className="d64"><b>When a subscription payment fails for good</b><span className="secondary">After Stripe's last retry. A client's Settings tab can change this for that client.</span></div>
+      <Segmented<"past_due" | "cancel"> label="When a subscription payment fails for good" value={rules.business as "past_due" | "cancel"} onChange={set}
+        items={[{ key: "past_due", label: "Keep it past due" }, { key: "cancel", label: "Cancel the subscription" }]} />
+      <p className="secondary pay-note">In your Stripe account, set Billing › Revenue recovery to leave the subscription as it is, so the portal applies this.</p>
     </div>
   );
 }

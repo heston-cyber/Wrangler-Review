@@ -2298,3 +2298,8 @@ button.inv-pdf { border: 0; background: none; cursor: pointer; font: inherit; fo
   .qz-cols > .col.right .qz-side:last-child { display: none; }
   .qz-eqhead { flex-wrap: wrap; }
 }
+
+/* Phase 2b D64 rows (702:1451) */
+.d64 { display: grid; gap: 4px; }
+.d64 b { font-weight: 500; color: var(--text-primary); }
+.d64 .secondary { font-size: var(--fs-text-small); }

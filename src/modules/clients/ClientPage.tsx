@@ -259,11 +259,12 @@ function SubFailRow({ clientId, name, show }: { clientId: Id<"clients">; name: s
   return (
     <div className="panel">
       <span className="wp-eyebrow">Subscriptions</span>
-      <div className="prow"><span className="pl">When a payment fails for good</span><span className="pr">
+      {/* D64 rows as approved (702:1757). */}
+      <div className="prow"><span className="pl">Payment fails for good</span><span className="pr">
         <Segmented<R> label="When a subscription payment fails for good" value={rules.client as R} onChange={(k) => void save({ clientId, rule: k }).then(() => show(k === "business" ? "Back to the business setting." : `Saved for ${name}.`), (e) => show(errText(e)))}
-          items={[{ key: "business", label: `Business setting (${biz})` }, { key: "past_due", label: "Keep past due" }, { key: "cancel", label: "Cancel it" }]} />
+          items={[{ key: "business", label: `Use the business setting (${biz})` }, { key: "past_due", label: "Keep past due" }, { key: "cancel", label: "Cancel" }]} />
       </span></div>
-      <div className="prow"><span className="pl">Means</span><span className="pr">After Stripe's last retry. Past due waits for you; Cancel ends the subscription and emails {name}.</span></div>
+      <div className="prow"><span className="pl">Applies to</span><span className="pr">Every {name} subscription, after Stripe's last retry fails.</span></div>
     </div>
   );
 }
